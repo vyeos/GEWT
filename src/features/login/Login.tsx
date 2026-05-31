@@ -36,37 +36,8 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
   }
 
   return (
-    <main className="grid min-h-screen grid-cols-[1.05fr_0.95fr]">
+    <main className="h-screen flex items-center justify-center">
       <Toaster richColors />
-      <section className="flex flex-col justify-between bg-primary p-10 text-primary-foreground">
-        <div className="flex items-center gap-3">
-          <div className="flex size-12 items-center justify-center rounded-md bg-white/15">
-            <Shield />
-          </div>
-          <div>
-            <div className="text-2xl font-semibold">GEWT Fee Management</div>
-            <div className="text-sm opacity-80">
-              Cloud-secured branch ledger
-            </div>
-          </div>
-        </div>
-        <div className="max-w-xl">
-          <h1 className="text-5xl font-semibold leading-tight tracking-normal">
-            Admissions, receipts, and dues without branch leakage.
-          </h1>
-          <p className="mt-5 text-lg opacity-85">
-            Admin works across Prantij, HMT, and Talod. Employees stay inside
-            their assigned branch from login through every API call.
-          </p>
-        </div>
-        <div className="grid grid-cols-3 gap-3 text-sm">
-          {["Auto numbering", "September year", "Backup import"].map((item) => (
-            <div key={item} className="rounded-md border border-white/20 p-3">
-              {item}
-            </div>
-          ))}
-        </div>
-      </section>
       <section className="flex items-center justify-center p-10">
         <Card className="w-full max-w-md">
           <CardHeader>

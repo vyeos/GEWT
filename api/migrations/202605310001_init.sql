@@ -129,5 +129,5 @@ ON CONFLICT DO NOTHING;
 
 -- Password is admin123. Rotate immediately in production seed configuration.
 INSERT INTO users (user_id, name, password_hash, role)
-VALUES ('admin', 'Initial Admin', '$argon2id$v=19$m=19456,t=2,p=1$uIf5O8g6h2qTDK+5yJVbEQ$uWOOMcECKkSGzpR3+y1hBa8AUKy40bYa15k5B8hbkrg', 'admin')
+VALUES ('admin', 'Initial Admin', '$argon2id$v=19$m=19456,t=2,p=1$d1/80bbKsUauEfQW/gLl4g$FMqkF2PX6DU4pRJrSzTsRXu5pU5Hnd80+e0SRRbU/bI', 'admin')
 ON CONFLICT (user_id) DO NOTHING;
