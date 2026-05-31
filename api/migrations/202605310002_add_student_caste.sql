@@ -1,2 +1,0 @@
-ALTER TABLE students
-ADD COLUMN caste text NOT NULL DEFAULT '';
