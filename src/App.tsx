@@ -101,7 +101,6 @@ function App() {
           token={token}
           refreshKey={screenRefreshKey}
           branches={branches}
-          me={me}
         />
       )}
       {screen === "utility" && (

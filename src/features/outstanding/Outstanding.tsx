@@ -1,13 +1,8 @@
-import { useEffect, useState } from "react";
-import { AlertTriangle, IndianRupee, Users } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -26,25 +21,39 @@ import {
 } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { money } from "@/lib/format";
-import type { Branch, Me, OutstandingRow } from "@/types";
+import type { Branch, OutstandingRow } from "@/types";
+
+const currentYear = new Date().getFullYear().toString();
+
+function admissionYear(row: OutstandingRow) {
+  return row.admission_date.slice(0, 4);
+}
 
 export function Outstanding({
   token,
   refreshKey,
   branches,
-  me,
 }: {
   token: string;
   refreshKey: number;
   branches: Branch[];
-  me: Me;
 }) {
   const [rows, setRows] = useState<OutstandingRow[]>([]);
-  const [branchId, setBranchId] = useState("all");
-  const visible = rows.filter(
-    (row) => branchId === "all" || row.branch_id === branchId,
+  const [batchYear, setBatchYear] = useState("");
+  const [branchId, setBranchId] = useState("");
+  const batchYears = useMemo(
+    () =>
+      Array.from(new Set(rows.map(admissionYear))).sort(
+        (a, b) => Number(b) - Number(a),
+      ),
+    [rows],
   );
-  const total = visible.reduce((sum, row) => sum + row.pending, 0);
+  const canShowTable = Boolean(batchYear && branchId);
+  const visible = canShowTable
+    ? rows.filter(
+        (row) => admissionYear(row) === batchYear && row.branch_id === branchId,
+      )
+    : [];
 
   useEffect(() => {
     async function loadOutstanding() {
@@ -62,69 +71,65 @@ export function Outstanding({
     void loadOutstanding();
   }, [token, refreshKey]);
 
+  useEffect(() => {
+    if (batchYears.length === 0) {
+      setBatchYear("");
+      return;
+    }
+
+    setBatchYear((selectedYear) => {
+      if (selectedYear && batchYears.includes(selectedYear)) return selectedYear;
+      if (batchYears.includes(currentYear)) return currentYear;
+      return "";
+    });
+  }, [batchYears]);
+
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardDescription>Students with pending</CardDescription>
-            <Users className="size-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{visible.length}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardDescription>Total pending</CardDescription>
-            <AlertTriangle className="size-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-destructive">{money(total)}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardDescription>Total due</CardDescription>
-            <IndianRupee className="size-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {money(visible.reduce((s, r) => s + r.total_due, 0))}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Branch filter</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Select
-              value={branchId}
-              onValueChange={setBranchId}
-              disabled={me.role !== "admin"}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="all">All branches</SelectItem>
-                  {branches.map((branch) => (
-                    <SelectItem key={branch.id} value={branch.id}>
-                      {branch.name}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:w-[30rem]">
+        <div className="flex flex-col gap-2">
+          <Label>Batch year</Label>
+          <Select value={batchYear} onValueChange={setBatchYear}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select batch" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {batchYears.map((year) => (
+                  <SelectItem key={year} value={year}>
+                    {year}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label>Branch</Label>
+          <Select value={branchId} onValueChange={setBranchId}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select branch" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {branches.map((branch) => (
+                  <SelectItem key={branch.id} value={branch.id}>
+                    {branch.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
-      <Card>
+      <Card className="p-0">
         <CardContent className="p-0">
-          {visible.length === 0 ? (
+          {!canShowTable ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">
+              Select batch year and branch to view outstanding fees
+            </p>
+          ) : visible.length === 0 ? (
             <p className="p-6 text-center text-sm text-muted-foreground">
               No outstanding fees found
             </p>
@@ -146,14 +151,20 @@ export function Outstanding({
                 {visible.map((row) => (
                   <TableRow key={row.id}>
                     <TableCell>{row.form_no}</TableCell>
-                    <TableCell className="font-medium">{row.student_name}</TableCell>
+                    <TableCell className="font-medium">
+                      {row.student_name}
+                    </TableCell>
                     <TableCell>{row.branch_name}</TableCell>
                     <TableCell>
                       <Badge variant="secondary">{row.course_name}</Badge>
                     </TableCell>
                     <TableCell>{row.current_period}</TableCell>
-                    <TableCell className="text-right">{money(row.total_due)}</TableCell>
-                    <TableCell className="text-right">{money(row.total_paid)}</TableCell>
+                    <TableCell className="text-right">
+                      {money(row.total_due)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {money(row.total_paid)}
+                    </TableCell>
                     <TableCell className="text-right font-medium text-destructive">
                       {money(row.pending)}
                     </TableCell>
