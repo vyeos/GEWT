@@ -903,12 +903,18 @@ fn student_select(where_clause: &str) -> String {
     )
 }
 
+fn academic_year_for(date: NaiveDate, academic_start_month: i32) -> i32 {
+    if (date.month() as i32) >= academic_start_month {
+        date.year()
+    } else {
+        date.year() - 1
+    }
+}
+
 fn due_for_student(student: &Student, academic_start_month: i32) -> (f64, String) {
     let now = Utc::now().date_naive();
-    let mut years_elapsed = now.year() - student.admission_date.year();
-    if (now.month() as i32) < academic_start_month {
-        years_elapsed -= 1;
-    }
+    let years_elapsed = academic_year_for(now, academic_start_month)
+        - academic_year_for(student.admission_date, academic_start_month);
     let current_year = (years_elapsed + 1).clamp(1, 4) as usize;
     let fees = [
         student.fee_year_1,
@@ -916,18 +922,12 @@ fn due_for_student(student: &Student, academic_start_month: i32) -> (f64, String
         student.fee_year_3,
         student.fee_year_4,
     ];
-    if student.course_duration_type == "semester" {
-        let mut semester = (current_year * 2)
-            .min(student.course_duration as usize)
-            .max(1);
-        if semester == 0 {
-            semester = 1;
-        }
-        let due = (0..semester).map(|i| fees[i / 2] / 2.0).sum();
-        (due, format!("Semester {semester}"))
+    let total_semesters = if student.course_duration_type == "semester" {
+        student.course_duration as usize
     } else {
-        let years = current_year.min(student.course_duration as usize);
-        let due = (0..years).map(|i| fees[i]).sum();
-        (due, format!("Year {years}"))
-    }
+        (student.course_duration as usize) * 2
+    };
+    let semester = (current_year * 2).min(total_semesters).max(1);
+    let due = (0..semester).map(|i| fees[i / 2] / 2.0).sum();
+    (due, format!("Semester {semester}"))
 }

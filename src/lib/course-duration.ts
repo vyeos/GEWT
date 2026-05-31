@@ -49,18 +49,7 @@ export function getCourseBillingPeriods(
 ): CourseBillingPeriod[] {
   const duration = getCourseDuration(source);
 
-  if (duration.type === "year") {
-    return Array.from({ length: duration.rawValue }, (_, index) => {
-      const year = index + 1;
-      return {
-        year,
-        semester: null,
-        label: `Year ${year}`,
-      };
-    });
-  }
-
-  return Array.from({ length: duration.rawValue }, (_, index) => {
+  return Array.from({ length: duration.totalSemesters }, (_, index) => {
     const semester = index + 1;
     return {
       year: Math.ceil(semester / 2),

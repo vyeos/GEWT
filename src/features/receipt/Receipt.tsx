@@ -38,12 +38,14 @@ type ReceiptRow = {
 };
 
 type StudentReceipt = {
-  receipt_no: string;
+  id?: string;
+  optimistic_id?: string;
+  receipt_no: string | number;
   receipt_date: string;
   fee_type: string;
   payment_mode: PaymentMode;
   amount_paid: number;
-  reference_no: string;
+  reference_no: string | null;
 };
 
 const feeTypes = ["Tuition", "Other"] as const;
@@ -76,6 +78,7 @@ export function Receipt({
   const [studentOpen, setStudentOpen] = useState(false);
   const [studentSearch, setStudentSearch] = useState("");
   const [studentReceipts, setStudentReceipts] = useState<StudentReceipt[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
   const requiresRef = mode !== "Cash";
   const allowedBranches =
     me.role === "admin"
@@ -224,20 +227,13 @@ export function Receipt({
     }
     return rows;
   }, [selectedStudent, studentReceipts, me.academic_year_start_month]);
-  const pendingForSelectedFeeType = useMemo(
+  const amountMax = useMemo(
     () =>
-      feeStatusRows
-        .filter((row) => row.feeType === feeType)
-        .reduce((sum, row) => sum + row.pending, 0),
-    [feeStatusRows, feeType],
+      selectedStudent
+        ? feeStatusRows.reduce((sum, row) => sum + row.pending, 0)
+        : undefined,
+    [feeStatusRows, selectedStudent],
   );
-  const hasSelectedFeeStatus = feeStatusRows.some(
-    (row) => row.feeType === feeType,
-  );
-  const amountMax =
-    selectedStudent && hasSelectedFeeStatus
-      ? pendingForSelectedFeeType
-      : undefined;
 
   useEffect(() => {
     if (amountMax !== undefined && amount > amountMax) {
@@ -274,8 +270,21 @@ export function Receipt({
       toast.error(`Amount paid cannot exceed ${money(amountMax)}`);
       return;
     }
+    const optimisticId = `optimistic-${Date.now()}`;
+    const optimisticReceipt: StudentReceipt = {
+      optimistic_id: optimisticId,
+      receipt_no: receiptNo,
+      receipt_date: receiptDate,
+      fee_type: feeType,
+      amount_paid: amount,
+      payment_mode: mode,
+      reference_no: reference,
+    };
+    setIsSaving(true);
+    setStudentReceipts((current) => [optimisticReceipt, ...current]);
+
     try {
-      await api("/receipts", token, {
+      const savedReceipt = await api<StudentReceipt>("/receipts", token, {
         method: "POST",
         body: JSON.stringify({
           receipt_no: receiptNo,
@@ -287,12 +296,22 @@ export function Receipt({
           reference_no: reference,
         }),
       });
+      setStudentReceipts((current) =>
+        current.map((receipt) =>
+          receipt.optimistic_id === optimisticId ? savedReceipt : receipt,
+        ),
+      );
       toast.success("Receipt saved");
       setReceiptNo("");
       setGeneratedReceiptNo("");
       void loadNextReceiptNo();
     } catch (error) {
+      setStudentReceipts((current) =>
+        current.filter((receipt) => receipt.optimistic_id !== optimisticId),
+      );
       toast.error(error instanceof Error ? error.message : "Receipt failed");
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -589,9 +608,9 @@ export function Receipt({
               </div>
             </div>
             <div className="flex justify-end">
-              <Button>
+              <Button disabled={isSaving}>
                 <ReceiptText className="size-4" />
-                Save receipt
+                {isSaving ? "Saving..." : "Save receipt"}
               </Button>
             </div>
           </form>
@@ -607,20 +626,20 @@ export function Receipt({
                   No payment history found
                 </p>
               ) : (
-                <Table>
+                <Table className="table-fixed">
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Receipt No</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Fee Type</TableHead>
-                      <TableHead>Mode</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead>Remarks</TableHead>
+                      <TableHead className="w-[15%]">Receipt No</TableHead>
+                      <TableHead className="w-[18%]">Date</TableHead>
+                      <TableHead className="w-[15%]">Fee Type</TableHead>
+                      <TableHead className="w-[14%]">Mode</TableHead>
+                      <TableHead className="w-[18%] text-right">Amount</TableHead>
+                      <TableHead className="w-[20%]">Remarks</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {studentReceipts.map((r) => (
-                      <TableRow key={r.receipt_no}>
+                      <TableRow key={r.id ?? r.optimistic_id ?? r.receipt_no}>
                         <TableCell>{r.receipt_no}</TableCell>
                         <TableCell>{r.receipt_date}</TableCell>
                         <TableCell>{r.fee_type || "Tuition"}</TableCell>
@@ -644,14 +663,14 @@ export function Receipt({
                   No fee information available
                 </p>
               ) : (
-                <Table>
+                <Table className="table-fixed">
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Fee Type</TableHead>
-                      <TableHead>Year</TableHead>
-                      <TableHead>Sem</TableHead>
-                      <TableHead className="text-right">Total</TableHead>
-                      <TableHead className="text-right">Pending</TableHead>
+                      <TableHead className="w-[22%]">Fee Type</TableHead>
+                      <TableHead className="w-[16%]">Year</TableHead>
+                      <TableHead className="w-[16%]">Sem</TableHead>
+                      <TableHead className="w-[23%] text-right">Total</TableHead>
+                      <TableHead className="w-[23%] text-right">Pending</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
