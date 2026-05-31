@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from "react";
+import { useState } from "react";
 import { toast, Toaster } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,7 +17,7 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
   const [password, setPassword] = useState("admin123");
   const [busy, setBusy] = useState(false);
 
-  async function submit(event: FormEvent) {
+  async function submit(event: React.SubmitEvent) {
     event.preventDefault();
     setBusy(true);
     try {
@@ -40,7 +40,9 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl">GEWT Fees</CardTitle>
-          <CardDescription>Sign in to access the academic ledger</CardDescription>
+          <CardDescription>
+            Sign in to access the academic ledger
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="flex flex-col gap-4" onSubmit={submit}>

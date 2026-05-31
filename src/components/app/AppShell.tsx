@@ -26,11 +26,36 @@ import { cn } from "@/lib/utils";
 import type { Me, Screen } from "@/types";
 
 const nav: { key: Screen; label: string; desc: string; icon: ElementType }[] = [
-  { key: "admission", label: "Admission", desc: "Register new students", icon: UserPlus },
-  { key: "receipt", label: "Fee Receipt", desc: "Record fee payments", icon: ReceiptText },
-  { key: "outstanding", label: "Outstanding", desc: "Pending fee report", icon: FileText },
-  { key: "utility", label: "Utility", desc: "Courses, users & settings", icon: Settings },
-  { key: "backup", label: "Backup/Import", desc: "Data backup & recovery", icon: Archive },
+  {
+    key: "admission",
+    label: "Admission",
+    desc: "Register new students",
+    icon: UserPlus,
+  },
+  {
+    key: "receipt",
+    label: "Fee Receipt",
+    desc: "Record fee payments",
+    icon: ReceiptText,
+  },
+  {
+    key: "outstanding",
+    label: "Outstanding",
+    desc: "Pending fee report",
+    icon: FileText,
+  },
+  {
+    key: "utility",
+    label: "Utility",
+    desc: "Courses, users & settings",
+    icon: Settings,
+  },
+  {
+    key: "backup",
+    label: "Backup/Import",
+    desc: "Data backup & recovery",
+    icon: Archive,
+  },
 ];
 
 export function AppShell({
@@ -69,19 +94,15 @@ export function AppShell({
             const Icon = item.icon;
             const active = screen === item.key;
             return (
-              <button
+              <Button
                 key={item.key}
                 onClick={() => onScreenChange(item.key)}
-                className={cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  active
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-sidebar-foreground hover:bg-sidebar-accent/50",
-                )}
+                variant={active ? "outline" : "ghost"}
+                className={cn("justify-start gap-3 transition-colors")}
               >
                 <Icon className="size-4" />
                 {item.label}
-              </button>
+              </Button>
             );
           })}
         </nav>
@@ -89,18 +110,18 @@ export function AppShell({
         <div className="border-t p-3">
           <div className="mb-3 flex items-center gap-3 px-1">
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{me.name}</div>
+              <div className="truncate text-sm font-medium capitalize">
+                {me.name}
+              </div>
               <div className="truncate text-xs text-muted-foreground">
                 {me.branch_name ?? "All branches"}
               </div>
             </div>
-            <Badge variant={me.role === "admin" ? "default" : "secondary"} className="shrink-0">
-              {me.role}
-            </Badge>
+            <Badge className="shrink-0 capitalize">{me.role}</Badge>
           </div>
           <Button
-            variant="outline"
-            className="w-full justify-start gap-3"
+            variant="destructive"
+            className="w-full gap-3"
             size="sm"
             onClick={() => setLogoutOpen(true)}
           >
@@ -117,7 +138,12 @@ export function AppShell({
               <h2 className="text-2xl font-semibold">{current?.label}</h2>
               <p className="text-sm text-muted-foreground">{current?.desc}</p>
             </div>
-            <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onRefresh}
+              disabled={loading}
+            >
               <RefreshCw className={cn("size-4", loading && "animate-spin")} />
               {loading ? "Refreshing" : "Refresh"}
             </Button>
@@ -136,7 +162,9 @@ export function AppShell({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setLogoutOpen(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel onClick={() => setLogoutOpen(false)}>
+              Cancel
+            </AlertDialogCancel>
             <AlertDialogAction onClick={onLogout}>Sign Out</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
