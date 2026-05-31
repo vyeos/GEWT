@@ -3,9 +3,11 @@ import {
   BookOpen,
   FileText,
   LogOut,
+  Moon,
   ReceiptText,
   RefreshCw,
   Settings,
+  Sun,
   UserPlus,
 } from "lucide-react";
 import { Toaster } from "sonner";
@@ -21,6 +23,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import type { Me, Screen } from "@/types";
 
@@ -55,16 +58,20 @@ export function AppShell({
   me,
   screen,
   loading,
+  isDarkMode,
   children,
   onScreenChange,
+  onThemeChange,
   onRefresh,
   onLogout,
 }: {
   me: Me;
   screen: Screen;
   loading: boolean;
+  isDarkMode: boolean;
   children: ReactNode;
   onScreenChange: (screen: Screen) => void;
+  onThemeChange: (isDarkMode: boolean) => void;
   onRefresh: () => void;
   onLogout: () => void;
 }) {
@@ -99,6 +106,24 @@ export function AppShell({
             );
           })}
         </nav>
+
+        <div className="border-t p-3">
+          <div className="flex items-center justify-between gap-3 px-1">
+            <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+              {isDarkMode ? (
+                <Moon className="size-4 shrink-0 text-muted-foreground" />
+              ) : (
+                <Sun className="size-4 shrink-0 text-muted-foreground" />
+              )}
+              <span>Dark mode</span>
+            </div>
+            <Switch
+              aria-label="Toggle dark mode"
+              checked={isDarkMode}
+              onCheckedChange={onThemeChange}
+            />
+          </div>
+        </div>
 
         <div className="border-t p-3">
           <div className="mb-3 flex items-center gap-3 px-1">

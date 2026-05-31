@@ -11,6 +11,19 @@ import { Utility } from "@/features/utility/Utility";
 import { api } from "@/lib/api";
 import type { Branch, Course, Me, Screen } from "@/types";
 
+type Theme = "light" | "dark";
+
+function getInitialTheme(): Theme {
+  const savedTheme = localStorage.getItem("gewt-theme");
+  if (savedTheme === "light" || savedTheme === "dark") {
+    return savedTheme;
+  }
+
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem("gewt-token"));
   const [me, setMe] = useState<Me | null>(null);
@@ -19,6 +32,7 @@ function App() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(false);
   const [screenRefreshKey, setScreenRefreshKey] = useState(0);
+  const [theme, setTheme] = useState<Theme>(getInitialTheme);
 
   async function refresh(session = token) {
     if (!session) return;
@@ -50,6 +64,11 @@ function App() {
     void refresh();
   }, []);
 
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    localStorage.setItem("gewt-theme", theme);
+  }, [theme]);
+
   function logout() {
     localStorage.removeItem("gewt-token");
     setToken(null);
@@ -73,7 +92,9 @@ function App() {
       me={me}
       screen={screen}
       loading={loading}
+      isDarkMode={theme === "dark"}
       onScreenChange={setScreen}
+      onThemeChange={(isDarkMode) => setTheme(isDarkMode ? "dark" : "light")}
       onRefresh={() => void refreshCurrentScreen()}
       onLogout={logout}
     >
