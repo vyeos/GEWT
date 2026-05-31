@@ -1,7 +1,6 @@
-import { FormEvent, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { UserPlus } from "lucide-react";
 import { toast } from "sonner";
-import { Field } from "@/components/app/Field";
 import { Info } from "@/components/app/Info";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -80,7 +80,7 @@ export function Admission({
   }
 
   return (
-    <form onSubmit={submit} className="grid grid-cols-[1fr_340px] gap-5">
+    <form onSubmit={submit} className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
       <Card>
         <CardHeader>
           <CardTitle>Admission Form</CardTitle>
@@ -88,150 +88,173 @@ export function Admission({
             Form number is assigned by the backend from 0001.
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid grid-cols-3 gap-4">
-          <Field label="Admission date">
-            <Input
-              type="date"
-              value={form.admission_date}
-              onChange={(e) =>
-                setForm({ ...form, admission_date: e.currentTarget.value })
-              }
-            />
-          </Field>
-          <Field label="Branch">
-            <Select
-              value={form.branch_id}
-              onValueChange={(branch_id) =>
-                setForm({ ...form, branch_id, course_id: "" })
-              }
-              disabled={me.role !== "admin"}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {allowedBranches.map((branch) => (
-                    <SelectItem key={branch.id} value={branch.id}>
-                      {branch.name}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Course">
-            <Select
-              value={form.course_id}
-              onValueChange={(course_id) => setForm({ ...form, course_id })}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select course" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {branchCourses.map((course) => (
-                    <SelectItem key={course.id} value={course.id}>
-                      {course.name}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Student name">
-            <Input
-              required
-              value={form.student_name}
-              onChange={(e) =>
-                setForm({ ...form, student_name: e.currentTarget.value })
-              }
-            />
-          </Field>
-          <Field label="Category">
-            <Input
-              value={form.category}
-              onChange={(e) =>
-                setForm({ ...form, category: e.currentTarget.value })
-              }
-            />
-          </Field>
-          <Field label="Gender">
-            <Select
-              value={form.gender}
-              onValueChange={(gender) => setForm({ ...form, gender })}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="Male">Male</SelectItem>
-                  <SelectItem value="Female">Female</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Aadhar">
-            <Input
-              value={form.aadhar}
-              onChange={(e) =>
-                setForm({ ...form, aadhar: e.currentTarget.value })
-              }
-            />
-          </Field>
-          <Field label="Student phone">
-            <Input
-              value={form.student_phone}
-              onChange={(e) =>
-                setForm({ ...form, student_phone: e.currentTarget.value })
-              }
-            />
-          </Field>
-          <Field label="Parent phone">
-            <Input
-              value={form.parent_phone}
-              onChange={(e) =>
-                setForm({ ...form, parent_phone: e.currentTarget.value })
-              }
-            />
-          </Field>
-          <div className="col-span-3">
-            <Field label="Address">
-              <Textarea
-                value={form.address}
-                onChange={(e) =>
-                  setForm({ ...form, address: e.currentTarget.value })
-                }
-              />
-            </Field>
-          </div>
-          {[1, 2, 3, 4].map((year) => (
-            <Field key={year} label={`Year ${year} fee`}>
+        <CardContent className="flex flex-col gap-5">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="flex flex-col gap-2">
+              <Label>Admission date</Label>
               <Input
-                type="number"
-                min="0"
-                value={form[`fee_year_${year}` as keyof typeof form] as number}
+                type="date"
+                value={form.admission_date}
                 onChange={(e) =>
-                  setForm({
-                    ...form,
-                    [`fee_year_${year}`]: Number(e.currentTarget.value),
-                  })
+                  setForm({ ...form, admission_date: e.currentTarget.value })
                 }
               />
-            </Field>
-          ))}
-          <div className="col-span-3 flex justify-end">
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Branch</Label>
+              <Select
+                value={form.branch_id}
+                onValueChange={(branch_id) =>
+                  setForm({ ...form, branch_id, course_id: "" })
+                }
+                disabled={me.role !== "admin"}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {allowedBranches.map((branch) => (
+                      <SelectItem key={branch.id} value={branch.id}>
+                        {branch.name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Course</Label>
+              <Select
+                value={form.course_id}
+                onValueChange={(course_id) => setForm({ ...form, course_id })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select course" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {branchCourses.map((course) => (
+                      <SelectItem key={course.id} value={course.id}>
+                        {course.name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="flex flex-col gap-2">
+              <Label>Student name *</Label>
+              <Input
+                required
+                value={form.student_name}
+                onChange={(e) =>
+                  setForm({ ...form, student_name: e.currentTarget.value })
+                }
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Category</Label>
+              <Input
+                value={form.category}
+                onChange={(e) =>
+                  setForm({ ...form, category: e.currentTarget.value })
+                }
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Gender</Label>
+              <Select
+                value={form.gender}
+                onValueChange={(gender) => setForm({ ...form, gender })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="Male">Male</SelectItem>
+                    <SelectItem value="Female">Female</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="flex flex-col gap-2">
+              <Label>Aadhar</Label>
+              <Input
+                value={form.aadhar}
+                onChange={(e) =>
+                  setForm({ ...form, aadhar: e.currentTarget.value })
+                }
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Student phone</Label>
+              <Input
+                value={form.student_phone}
+                onChange={(e) =>
+                  setForm({ ...form, student_phone: e.currentTarget.value })
+                }
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Parent phone</Label>
+              <Input
+                value={form.parent_phone}
+                onChange={(e) =>
+                  setForm({ ...form, parent_phone: e.currentTarget.value })
+                }
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label>Address</Label>
+            <Textarea
+              value={form.address}
+              onChange={(e) =>
+                setForm({ ...form, address: e.currentTarget.value })
+              }
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            {[1, 2, 3, 4].map((year) => (
+              <div key={year} className="flex flex-col gap-2">
+                <Label>Year {year} fee</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  value={form[`fee_year_${year}` as keyof typeof form] as number}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      [`fee_year_${year}`]: Number(e.currentTarget.value),
+                    })
+                  }
+                />
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-end">
             <Button>
-              <UserPlus data-icon="inline-start" />
+              <UserPlus className="size-4" />
               Save admission
             </Button>
           </div>
         </CardContent>
       </Card>
-      <Card>
+
+      <Card className="h-fit">
         <CardHeader>
-          <CardTitle>Course rule</CardTitle>
+          <CardTitle>Course info</CardTitle>
           <CardDescription>
             Duration is read from the selected course.
           </CardDescription>

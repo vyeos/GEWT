@@ -1,8 +1,6 @@
-import { FormEvent, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { BookOpen, Settings } from "lucide-react";
 import { toast } from "sonner";
-import { DataTable, Row } from "@/components/app/DataTable";
-import { Field } from "@/components/app/Field";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,6 +21,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import type { Branch, Course, Me, User } from "@/types";
@@ -52,6 +58,7 @@ export function Utility({
     academic_year_start_month: me.academic_year_start_month,
     backups_enabled: true,
   });
+
   if (me.role !== "admin") {
     return (
       <Card>
@@ -65,6 +72,7 @@ export function Utility({
       </Card>
     );
   }
+
   async function saveCourse(event: FormEvent) {
     event.preventDefault();
     await api("/courses", token, {
@@ -74,6 +82,7 @@ export function Utility({
     toast.success("Course saved");
     onSaved();
   }
+
   async function saveSettings() {
     await api("/academic-settings", token, {
       method: "PATCH",
@@ -82,6 +91,7 @@ export function Utility({
     toast.success("Academic settings saved");
     onSaved();
   }
+
   return (
     <Tabs defaultValue="courses">
       <TabsList>
@@ -89,15 +99,18 @@ export function Utility({
         <TabsTrigger value="users">Users</TabsTrigger>
         <TabsTrigger value="settings">Settings</TabsTrigger>
       </TabsList>
-      <TabsContent value="courses">
-        <div className="grid grid-cols-[420px_1fr] gap-5">
+
+      <TabsContent value="courses" className="mt-4">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[380px_1fr]">
           <Card>
             <CardHeader>
               <CardTitle>Add course</CardTitle>
+              <CardDescription>Create a new course for a branch</CardDescription>
             </CardHeader>
             <CardContent>
               <form className="flex flex-col gap-4" onSubmit={saveCourse}>
-                <Field label="Branch">
+                <div className="flex flex-col gap-2">
+                  <Label>Branch</Label>
                   <Select
                     value={course.branch_id}
                     onValueChange={(branch_id) =>
@@ -117,8 +130,9 @@ export function Utility({
                       </SelectGroup>
                     </SelectContent>
                   </Select>
-                </Field>
-                <Field label="Course name">
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Course name</Label>
                   <Input
                     required
                     value={course.name}
@@ -126,8 +140,9 @@ export function Utility({
                       setCourse({ ...course, name: e.currentTarget.value })
                     }
                   />
-                </Field>
-                <Field label="Duration">
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Duration</Label>
                   <Input
                     type="number"
                     min="1"
@@ -139,8 +154,9 @@ export function Utility({
                       })
                     }
                   />
-                </Field>
-                <Field label="Duration type">
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Duration type</Label>
                   <Select
                     value={course.duration_type}
                     onValueChange={(duration_type) =>
@@ -157,59 +173,101 @@ export function Utility({
                       </SelectGroup>
                     </SelectContent>
                   </Select>
-                </Field>
+                </div>
                 <Button>
-                  <BookOpen data-icon="inline-start" />
+                  <BookOpen className="size-4" />
                   Save course
                 </Button>
               </form>
             </CardContent>
           </Card>
-          <DataTable
-            columns="1fr 1fr 120px 120px"
-            headers={["Course", "Branch", "Duration", "Type"]}
-          >
-            {courses.map((item) => (
-              <Row key={item.id} columns="1fr 1fr 120px 120px">
-                <strong>{item.name}</strong>
-                <span>
-                  {
-                    branches.find((branch) => branch.id === item.branch_id)
-                      ?.name
-                  }
-                </span>
-                <span>{item.duration}</span>
-                <Badge variant="outline">{item.duration_type}</Badge>
-              </Row>
-            ))}
-          </DataTable>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>All courses</CardTitle>
+              <CardDescription>
+                {courses.length} course{courses.length !== 1 && "s"} configured
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Course</TableHead>
+                    <TableHead>Branch</TableHead>
+                    <TableHead>Duration</TableHead>
+                    <TableHead>Type</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {courses.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell className="font-medium">{item.name}</TableCell>
+                      <TableCell>
+                        {branches.find((b) => b.id === item.branch_id)?.name}
+                      </TableCell>
+                      <TableCell>{item.duration}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{item.duration_type}</Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </div>
       </TabsContent>
-      <TabsContent value="users">
-        <DataTable
-          columns="1fr 1fr 120px 1fr"
-          headers={["User ID", "Name", "Role", "Branch"]}
-        >
-          {users.map((user) => (
-            <Row key={user.id} columns="1fr 1fr 120px 1fr">
-              <span>{user.user_id}</span>
-              <strong>{user.name}</strong>
-              <Badge>{user.role}</Badge>
-              <span>
-                {branches.find((branch) => branch.id === user.branch_id)
-                  ?.name ?? "All branches"}
-              </span>
-            </Row>
-          ))}
-        </DataTable>
+
+      <TabsContent value="users" className="mt-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Users</CardTitle>
+            <CardDescription>
+              {users.length} user{users.length !== 1 && "s"} registered
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>User ID</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Branch</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {users.map((user) => (
+                  <TableRow key={user.id}>
+                    <TableCell>{user.user_id}</TableCell>
+                    <TableCell className="font-medium">{user.name}</TableCell>
+                    <TableCell>
+                      <Badge variant={user.role === "admin" ? "default" : "secondary"}>
+                        {user.role}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {branches.find((b) => b.id === user.branch_id)?.name ??
+                        "All branches"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       </TabsContent>
-      <TabsContent value="settings">
+
+      <TabsContent value="settings" className="mt-4">
         <Card className="max-w-xl">
           <CardHeader>
             <CardTitle>Academic and backup settings</CardTitle>
+            <CardDescription>Configure system-wide preferences</CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            <Field label="Academic year start month">
+          <CardContent className="flex flex-col gap-5">
+            <div className="flex flex-col gap-2">
+              <Label>Academic year start month</Label>
               <Input
                 type="number"
                 min="1"
@@ -222,7 +280,7 @@ export function Utility({
                   })
                 }
               />
-            </Field>
+            </div>
             <div className="flex items-center justify-between rounded-md border p-3">
               <div>
                 <Label>Scheduled backups</Label>
@@ -237,8 +295,8 @@ export function Utility({
                 }
               />
             </div>
-            <Button onClick={saveSettings} type="button">
-              <Settings data-icon="inline-start" />
+            <Button onClick={saveSettings} type="button" className="self-start">
+              <Settings className="size-4" />
               Save settings
             </Button>
           </CardContent>

@@ -1,7 +1,5 @@
-import { FormEvent, useState } from "react";
-import { Shield } from "lucide-react";
+import { type FormEvent, useState } from "react";
 import { toast, Toaster } from "sonner";
-import { Field } from "@/components/app/Field";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -11,6 +9,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
 
 export function Login({ onLogin }: { onLogin: (token: string) => void }) {
@@ -36,36 +35,40 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
   }
 
   return (
-    <main className="h-screen flex items-center justify-center">
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Toaster richColors />
-      <section className="flex items-center justify-center p-10">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle>Sign in</CardTitle>
-            <CardDescription>
-              Use seeded admin: admin / admin123 after running migrations.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form className="flex flex-col gap-4" onSubmit={submit}>
-              <Field label="User ID">
-                <Input
-                  value={userId}
-                  onChange={(event) => setUserId(event.currentTarget.value)}
-                />
-              </Field>
-              <Field label="Password">
-                <Input
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.currentTarget.value)}
-                />
-              </Field>
-              <Button disabled={busy}>{busy ? "Signing in" : "Login"}</Button>
-            </form>
-          </CardContent>
-        </Card>
-      </section>
-    </main>
+      <Card className="w-full max-w-sm">
+        <CardHeader className="text-center">
+          <CardTitle className="text-2xl">GEWT Fees</CardTitle>
+          <CardDescription>Sign in to access the academic ledger</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="flex flex-col gap-4" onSubmit={submit}>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="userId">User ID</Label>
+              <Input
+                id="userId"
+                value={userId}
+                onChange={(e) => setUserId(e.currentTarget.value)}
+                required
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.currentTarget.value)}
+                required
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={busy}>
+              {busy ? "Signing in..." : "Sign In"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

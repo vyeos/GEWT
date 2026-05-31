@@ -1,7 +1,6 @@
-import { FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { ReceiptText } from "lucide-react";
 import { toast } from "sonner";
-import { Field } from "@/components/app/Field";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -11,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -72,67 +72,72 @@ export function Receipt({
       <CardHeader>
         <CardTitle>Fee Receipt</CardTitle>
         <CardDescription>
-          Receipt number starts at 1 and increments inside a database
-          transaction.
+          Receipt number auto-increments from the database.
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={submit} className="grid grid-cols-4 gap-4">
-          <Field label="Student">
-            <Select value={studentId} onValueChange={setStudentId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select student" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {students.map((student) => (
-                    <SelectItem key={student.id} value={student.id}>
-                      {student.form_no} - {student.student_name}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Amount paid">
-            <Input
-              required
-              type="number"
-              min="1"
-              value={amount}
-              onChange={(e) => setAmount(Number(e.currentTarget.value))}
-            />
-          </Field>
-          <Field label="Payment mode">
-            <Select
-              value={mode}
-              onValueChange={(value) => setMode(value as PaymentMode)}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {paymentModes.map((item) => (
-                    <SelectItem key={item} value={item}>
-                      {item}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label={requiresRef ? "Reference number" : "Reference"}>
-            <Input
-              value={reference}
-              disabled={!requiresRef}
-              required={requiresRef}
-              onChange={(e) => setReference(e.currentTarget.value)}
-            />
-          </Field>
-          <div className="col-span-4 flex justify-end">
+        <form onSubmit={submit} className="flex flex-col gap-5">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-2">
+              <Label>Student</Label>
+              <Select value={studentId} onValueChange={setStudentId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select student" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {students.map((student) => (
+                      <SelectItem key={student.id} value={student.id}>
+                        {student.form_no} — {student.student_name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Amount paid</Label>
+              <Input
+                required
+                type="number"
+                min="1"
+                value={amount}
+                onChange={(e) => setAmount(Number(e.currentTarget.value))}
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Payment mode</Label>
+              <Select
+                value={mode}
+                onValueChange={(value) => setMode(value as PaymentMode)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {paymentModes.map((item) => (
+                      <SelectItem key={item} value={item}>
+                        {item}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>{requiresRef ? "Reference number *" : "Reference"}</Label>
+              <Input
+                value={reference}
+                disabled={!requiresRef}
+                required={requiresRef}
+                onChange={(e) => setReference(e.currentTarget.value)}
+              />
+            </div>
+          </div>
+          <div className="flex justify-end">
             <Button>
-              <ReceiptText data-icon="inline-start" />
+              <ReceiptText className="size-4" />
               Save receipt
             </Button>
           </div>
