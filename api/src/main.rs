@@ -138,6 +138,7 @@ struct Receipt {
     receipt_date: NaiveDate,
     student_id: Uuid,
     branch_id: Uuid,
+    fee_type: String,
     amount_paid: f64,
     payment_mode: String,
     reference_no: Option<String>,
@@ -190,6 +191,7 @@ struct ReceiptRequest {
     receipt_no: Option<String>,
     student_id: Uuid,
     receipt_date: NaiveDate,
+    fee_type: String,
     amount_paid: f64,
     payment_mode: String,
     reference_no: Option<String>,
@@ -223,6 +225,8 @@ struct BackupImportRequest {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::from_path(format!("{}/.env", env!("CARGO_MANIFEST_DIR"))).ok();
+    dotenvy::dotenv().ok();
     tracing_subscriber::fmt().with_env_filter("info").init();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".to_string());
@@ -486,17 +490,37 @@ async fn next_receipt_no(
 async fn receipts(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
 ) -> ApiResult<Json<Vec<Receipt>>> {
     let auth = claims(&state, &headers)?;
-    let rows = if auth.role == "admin" {
-        sqlx::query_as("SELECT id, receipt_no, receipt_date, student_id, branch_id, amount_paid::float8 AS amount_paid, payment_mode, reference_no FROM receipts ORDER BY receipt_no DESC")
+    let student_id = params
+        .get("student_id")
+        .and_then(|value| value.parse::<Uuid>().ok());
+    let rows = match (auth.role.as_str(), student_id) {
+        ("admin", Some(student_id)) => {
+            sqlx::query_as("SELECT id, receipt_no, receipt_date, student_id, branch_id, COALESCE(fee_type, 'Tuition') AS fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no FROM receipts WHERE student_id=$1 ORDER BY receipt_no DESC")
+                .bind(student_id)
+                .fetch_all(&state.pool)
+                .await?
+        }
+        ("admin", None) => {
+            sqlx::query_as("SELECT id, receipt_no, receipt_date, student_id, branch_id, COALESCE(fee_type, 'Tuition') AS fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no FROM receipts ORDER BY receipt_no DESC")
             .fetch_all(&state.pool)
             .await?
-    } else {
-        sqlx::query_as("SELECT id, receipt_no, receipt_date, student_id, branch_id, amount_paid::float8 AS amount_paid, payment_mode, reference_no FROM receipts WHERE branch_id=$1 ORDER BY receipt_no DESC")
+        }
+        (_, Some(student_id)) => {
+            sqlx::query_as("SELECT id, receipt_no, receipt_date, student_id, branch_id, COALESCE(fee_type, 'Tuition') AS fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no FROM receipts WHERE branch_id=$1 AND student_id=$2 ORDER BY receipt_no DESC")
             .bind(auth.branch_id.ok_or(ApiError::Forbidden)?)
+                .bind(student_id)
             .fetch_all(&state.pool)
             .await?
+        }
+        (_, None) => {
+            sqlx::query_as("SELECT id, receipt_no, receipt_date, student_id, branch_id, COALESCE(fee_type, 'Tuition') AS fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no FROM receipts WHERE branch_id=$1 ORDER BY receipt_no DESC")
+                .bind(auth.branch_id.ok_or(ApiError::Forbidden)?)
+                .fetch_all(&state.pool)
+                .await?
+        }
     };
     Ok(Json(rows))
 }
@@ -509,6 +533,9 @@ async fn create_receipt(
     let auth = claims(&state, &headers)?;
     if req.amount_paid <= 0.0 {
         return Err(ApiError::BadRequest("Amount paid is required".to_string()));
+    }
+    if !["Tuition", "Other"].contains(&req.fee_type.as_str()) {
+        return Err(ApiError::BadRequest("Invalid fee type".to_string()));
     }
     if req.payment_mode != "Cash" && req.reference_no.as_deref().unwrap_or("").is_empty() {
         return Err(ApiError::BadRequest(
@@ -523,14 +550,15 @@ async fn create_receipt(
     let mut tx = state.pool.begin().await?;
     let receipt_no = resolve_receipt_no(&mut tx, req.receipt_no.as_deref()).await?;
     let row = sqlx::query_as(
-        "INSERT INTO receipts (receipt_no, receipt_date, student_id, branch_id, amount_paid, payment_mode, reference_no, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         RETURNING id, receipt_no, receipt_date, student_id, branch_id, amount_paid::float8 AS amount_paid, payment_mode, reference_no",
+        "INSERT INTO receipts (receipt_no, receipt_date, student_id, branch_id, fee_type, amount_paid, payment_mode, reference_no, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING id, receipt_no, receipt_date, student_id, branch_id, fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no",
     )
     .bind(receipt_no)
     .bind(req.receipt_date)
     .bind(req.student_id)
     .bind(branch_id)
+    .bind(req.fee_type)
     .bind(req.amount_paid)
     .bind(req.payment_mode)
     .bind(req.reference_no)
@@ -547,7 +575,7 @@ async fn receipt(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Receipt>> {
     let auth = claims(&state, &headers)?;
-    let row: Receipt = sqlx::query_as("SELECT id, receipt_no, receipt_date, student_id, branch_id, amount_paid::float8 AS amount_paid, payment_mode, reference_no FROM receipts WHERE id=$1")
+    let row: Receipt = sqlx::query_as("SELECT id, receipt_no, receipt_date, student_id, branch_id, COALESCE(fee_type, 'Tuition') AS fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no FROM receipts WHERE id=$1")
         .bind(id)
         .fetch_one(&state.pool)
         .await?;
@@ -581,7 +609,7 @@ async fn outstanding(
     let mut rows = Vec::new();
     for student in all_students {
         let paid: f64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(amount_paid),0)::float8 FROM receipts WHERE student_id=$1",
+            "SELECT COALESCE(SUM(amount_paid),0)::float8 FROM receipts WHERE student_id=$1 AND fee_type='Tuition'",
         )
         .bind(student.id)
         .fetch_one(&state.pool)

@@ -19,9 +19,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { getCourseDuration } from "@/lib/course-duration";
 import { today } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import type { Branch, Course, Me, Student } from "@/types";
 
 const categories = ["General", "SC", "ST", "OBC", "Others"];
@@ -68,9 +69,7 @@ export function Admission({
     (course) => course.id === form.course_id,
   );
   const durationValue = selectedCourse
-    ? `${selectedCourse.duration} ${
-        selectedCourse.duration_type === "semester" ? "semester" : "year"
-      }${selectedCourse.duration > 1 ? "s" : ""}`
+    ? getCourseDuration(selectedCourse).label
     : "";
 
   async function loadNextFormNo() {

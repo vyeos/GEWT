@@ -90,6 +90,9 @@ function App() {
       {screen === "receipt" && (
         <Receipt
           token={token}
+          me={me}
+          branches={branches}
+          courses={courses}
           refreshKey={screenRefreshKey}
         />
       )}
