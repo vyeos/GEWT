@@ -519,7 +519,7 @@ async fn next_form_no(
 ) -> ApiResult<Json<NextFormNoResponse>> {
     claims(&state, &headers)?;
     Ok(Json(NextFormNoResponse {
-        form_no: peek_number(&state.pool, "student_form").await?,
+        form_no: peek_form_no(&state.pool).await?,
     }))
 }
 
@@ -529,7 +529,7 @@ async fn next_receipt_no(
 ) -> ApiResult<Json<NextReceiptNoResponse>> {
     claims(&state, &headers)?;
     Ok(Json(NextReceiptNoResponse {
-        receipt_no: peek_number(&state.pool, "receipt").await?,
+        receipt_no: peek_receipt_no(&state.pool).await?,
     }))
 }
 
@@ -843,34 +843,40 @@ fn hash_password(password: &str) -> ApiResult<String> {
         .map_err(|_| ApiError::BadRequest("Could not hash password".to_string()))
 }
 
-async fn next_number(tx: &mut Transaction<'_, Postgres>, key: &str) -> ApiResult<String> {
-    let (next_value, padding): (i64, i32) =
-        sqlx::query_as("SELECT next_value, padding FROM numbering_rules WHERE key=$1 FOR UPDATE")
-            .bind(key)
-            .fetch_one(&mut **tx)
-            .await?;
-    sqlx::query("UPDATE numbering_rules SET next_value = next_value + 1 WHERE key=$1")
-        .bind(key)
-        .execute(&mut **tx)
-        .await?;
-    if padding > 0 {
-        Ok(format!("{:0width$}", next_value, width = padding as usize))
-    } else {
-        Ok(next_value.to_string())
-    }
+async fn next_form_no_value(tx: &mut Transaction<'_, Postgres>) -> ApiResult<String> {
+    let next: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(CASE WHEN form_no ~ '^\\d+$' THEN form_no::bigint END), 0) + 1 FROM students",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(format!("{:04}", next))
 }
 
-async fn peek_number(pool: &PgPool, key: &str) -> ApiResult<String> {
-    let (next_value, padding): (i64, i32) =
-        sqlx::query_as("SELECT next_value, padding FROM numbering_rules WHERE key=$1")
-            .bind(key)
-            .fetch_one(pool)
-            .await?;
-    if padding > 0 {
-        Ok(format!("{:0width$}", next_value, width = padding as usize))
-    } else {
-        Ok(next_value.to_string())
-    }
+async fn next_receipt_no_value(tx: &mut Transaction<'_, Postgres>) -> ApiResult<i64> {
+    let next: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(receipt_no), 0) + 1 FROM receipts",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(next)
+}
+
+async fn peek_form_no(pool: &PgPool) -> ApiResult<String> {
+    let next: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(CASE WHEN form_no ~ '^\\d+$' THEN form_no::bigint END), 0) + 1 FROM students",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(format!("{:04}", next))
+}
+
+async fn peek_receipt_no(pool: &PgPool) -> ApiResult<String> {
+    let next: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(receipt_no), 0) + 1 FROM receipts",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(next.to_string())
 }
 
 async fn resolve_student_form_no(
@@ -878,22 +884,8 @@ async fn resolve_student_form_no(
     form_no: Option<&str>,
 ) -> ApiResult<String> {
     let Some(form_no) = form_no.map(str::trim).filter(|value| !value.is_empty()) else {
-        return next_number(tx, "student_form").await;
+        return next_form_no_value(tx).await;
     };
-    let (next_value, _padding): (i64, i32) =
-        sqlx::query_as("SELECT next_value, padding FROM numbering_rules WHERE key=$1 FOR UPDATE")
-            .bind("student_form")
-            .fetch_one(&mut **tx)
-            .await?;
-    if let Ok(value) = form_no.parse::<i64>() {
-        if value >= next_value {
-            sqlx::query("UPDATE numbering_rules SET next_value = $1 WHERE key=$2")
-                .bind(value + 1)
-                .bind("student_form")
-                .execute(&mut **tx)
-                .await?;
-        }
-    }
     Ok(form_no.to_string())
 }
 
@@ -902,27 +894,11 @@ async fn resolve_receipt_no(
     receipt_no: Option<&str>,
 ) -> ApiResult<i64> {
     let Some(receipt_no) = receipt_no.map(str::trim).filter(|value| !value.is_empty()) else {
-        return next_number(tx, "receipt")
-            .await?
-            .parse::<i64>()
-            .map_err(|_| ApiError::BadRequest("Receipt number must be numeric".to_string()));
+        return next_receipt_no_value(tx).await;
     };
-    let value = receipt_no
+    receipt_no
         .parse::<i64>()
-        .map_err(|_| ApiError::BadRequest("Receipt number must be numeric".to_string()))?;
-    let (next_value, _padding): (i64, i32) =
-        sqlx::query_as("SELECT next_value, padding FROM numbering_rules WHERE key=$1 FOR UPDATE")
-            .bind("receipt")
-            .fetch_one(&mut **tx)
-            .await?;
-    if value >= next_value {
-        sqlx::query("UPDATE numbering_rules SET next_value = $1 WHERE key=$2")
-            .bind(value + 1)
-            .bind("receipt")
-            .execute(&mut **tx)
-            .await?;
-    }
-    Ok(value)
+        .map_err(|_| ApiError::BadRequest("Receipt number must be numeric".to_string()))
 }
 
 async fn load_students(pool: &PgPool, branch_id: Option<Uuid>) -> ApiResult<Vec<Student>> {
