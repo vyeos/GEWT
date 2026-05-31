@@ -1,17 +1,15 @@
-import { type FormEvent, useState } from "react";
-import { UserPlus } from "lucide-react";
+import { type FormEvent, useEffect, useState } from "react";
+import { Check, ChevronsUpDown, RotateCcw, UserPlus } from "lucide-react";
 import { toast } from "sonner";
-import { Info } from "@/components/app/Info";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -21,9 +19,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { today } from "@/lib/format";
 import type { Branch, Course, Me, Student } from "@/types";
+
+const categories = ["General", "SC", "ST", "OBC", "Others"];
 
 export function Admission({
   token,
@@ -42,37 +43,78 @@ export function Admission({
     me.role === "admin"
       ? branches
       : branches.filter((branch) => branch.id === me.branch_id);
-  const [form, setForm] = useState({
+  const initialForm = (form_no = "") => ({
+    form_no,
     admission_date: today(),
     branch_id: allowedBranches[0]?.id ?? "",
     course_id: "",
+    surname: "",
     student_name: "",
+    father_name: "",
     category: "General",
+    religion: "",
+    caste: "",
     gender: "Male",
     aadhar: "",
     address: "",
     student_phone: "",
     parent_phone: "",
-    fee_year_1: 0,
-    fee_year_2: 0,
-    fee_year_3: 0,
-    fee_year_4: 0,
+    yearly_fee: 0,
   });
-  const branchCourses = courses.filter(
-    (course) => course.branch_id === form.branch_id,
-  );
-  const selectedCourse = branchCourses.find(
+  const [form, setForm] = useState(initialForm);
+  const [generatedFormNo, setGeneratedFormNo] = useState("");
+  const [courseOpen, setCourseOpen] = useState(false);
+  const selectedCourse = courses.find(
     (course) => course.id === form.course_id,
   );
+  const durationValue = selectedCourse
+    ? `${selectedCourse.duration} ${
+        selectedCourse.duration_type === "semester" ? "semester" : "year"
+      }${selectedCourse.duration > 1 ? "s" : ""}`
+    : "";
+
+  async function loadNextFormNo() {
+    try {
+      const next = await api<{ form_no: string }>(
+        "/students/next-form-no",
+        token,
+      );
+      setGeneratedFormNo(next.form_no);
+      setForm((current) => ({ ...current, form_no: next.form_no }));
+    } catch {
+      setGeneratedFormNo("");
+      setForm((current) => ({ ...current, form_no: "" }));
+    }
+  }
+
+  useEffect(() => {
+    void loadNextFormNo();
+  }, [token]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     try {
+      const { yearly_fee, surname, student_name, father_name, ...studentForm } =
+        form;
+      const fullName = [surname, student_name, father_name]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join(" ");
       await api<Student>("/students", token, {
         method: "POST",
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          ...studentForm,
+          student_name: fullName,
+          fee_year_1: yearly_fee,
+          fee_year_2: yearly_fee,
+          fee_year_3: yearly_fee,
+          fee_year_4: yearly_fee,
+        }),
       });
       toast.success("Admission saved");
+      setForm(initialForm());
+      setGeneratedFormNo("");
+      void loadNextFormNo();
       onSaved();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Admission failed");
@@ -80,16 +122,36 @@ export function Admission({
   }
 
   return (
-    <form onSubmit={submit} className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
+    <form onSubmit={submit}>
       <Card>
-        <CardHeader>
-          <CardTitle>Admission Form</CardTitle>
-          <CardDescription>
-            Form number is assigned by the backend from 0001.
-          </CardDescription>
-        </CardHeader>
         <CardContent className="flex flex-col gap-5">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-2">
+              <Label>Form No.</Label>
+              <div className="flex gap-2">
+                <Input
+                  required
+                  value={form.form_no}
+                  onChange={(e) =>
+                    setForm({ ...form, form_no: e.currentTarget.value })
+                  }
+                />
+                {generatedFormNo && form.form_no !== generatedFormNo && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    title="Reset form number"
+                    aria-label="Reset form number"
+                    onClick={() =>
+                      setForm({ ...form, form_no: generatedFormNo })
+                    }
+                  >
+                    <RotateCcw className="size-4" />
+                  </Button>
+                )}
+              </div>
+            </div>
             <div className="flex flex-col gap-2">
               <Label>Admission date</Label>
               <Input
@@ -100,54 +162,127 @@ export function Admission({
                 }
               />
             </div>
-            <div className="flex flex-col gap-2">
-              <Label>Branch</Label>
-              <Select
-                value={form.branch_id}
-                onValueChange={(branch_id) =>
-                  setForm({ ...form, branch_id, course_id: "" })
-                }
-                disabled={me.role !== "admin"}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {allowedBranches.map((branch) => (
-                      <SelectItem key={branch.id} value={branch.id}>
-                        {branch.name}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
               <Label>Course</Label>
-              <Select
-                value={form.course_id}
-                onValueChange={(course_id) => setForm({ ...form, course_id })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select course" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {branchCourses.map((course) => (
-                      <SelectItem key={course.id} value={course.id}>
-                        {course.name}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
+              <Popover open={courseOpen} onOpenChange={setCourseOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={courseOpen}
+                    className="w-full justify-between font-normal"
+                  >
+                    {selectedCourse ? (
+                      <span>
+                        {selectedCourse.name}
+                        <span className="ml-1.5 text-muted-foreground">
+                          (
+                          {
+                            allowedBranches.find(
+                              (b) => b.id === selectedCourse.branch_id,
+                            )?.name
+                          }
+                          )
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        Select course
+                      </span>
+                    )}
+                    <ChevronsUpDown className="ml-auto size-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  className="w-auto min-w-[var(--radix-popover-trigger-width)] p-0"
+                  align="start"
+                >
+                  <div className="flex divide-x">
+                    {allowedBranches.map((branch) => {
+                      const branchCourses = courses.filter(
+                        (c) => c.branch_id === branch.id,
+                      );
+                      if (branchCourses.length === 0) return null;
+                      return (
+                        <div key={branch.id} className="min-w-40 flex-1 p-1">
+                          <div className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground">
+                            {branch.name}
+                          </div>
+                          {branchCourses.map((course) => (
+                            <button
+                              key={course.id}
+                              type="button"
+                              className={cn(
+                                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent",
+                                form.course_id === course.id && "bg-accent",
+                              )}
+                              onClick={() => {
+                                setForm({
+                                  ...form,
+                                  course_id: course.id,
+                                  branch_id: course.branch_id,
+                                });
+                                setCourseOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "size-4 shrink-0",
+                                  form.course_id === course.id
+                                    ? "opacity-100"
+                                    : "opacity-0",
+                                )}
+                              />
+                              {course.name}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Duration</Label>
+              <Input value={durationValue} disabled />
             </div>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="flex flex-col gap-2">
-              <Label>Student name *</Label>
+              <Label>Yearly fee</Label>
+              <Input
+                type="number"
+                min="0"
+                value={form.yearly_fee}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    yearly_fee: Number(e.currentTarget.value),
+                  })
+                }
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="flex flex-col gap-2">
+              <Label>Surname *</Label>
+              <Input
+                required
+                value={form.surname}
+                onChange={(e) =>
+                  setForm({ ...form, surname: e.currentTarget.value })
+                }
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Student's name *</Label>
               <Input
                 required
                 value={form.student_name}
@@ -157,36 +292,82 @@ export function Admission({
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label>Category</Label>
+              <Label>Father's name *</Label>
               <Input
-                value={form.category}
+                required
+                value={form.father_name}
                 onChange={(e) =>
-                  setForm({ ...form, category: e.currentTarget.value })
+                  setForm({ ...form, father_name: e.currentTarget.value })
                 }
               />
             </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="flex flex-col gap-2">
-              <Label>Gender</Label>
+              <Label>Category</Label>
               <Select
-                value={form.gender}
-                onValueChange={(gender) => setForm({ ...form, gender })}
+                value={form.category}
+                onValueChange={(category) => setForm({ ...form, category })}
               >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectItem value="Male">Male</SelectItem>
-                    <SelectItem value="Female">Female</SelectItem>
+                    {categories.map((category) => (
+                      <SelectItem key={category} value={category}>
+                        {category}
+                      </SelectItem>
+                    ))}
                   </SelectGroup>
                 </SelectContent>
               </Select>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Religion</Label>
+              <Input
+                value={form.religion}
+                onChange={(e) =>
+                  setForm({ ...form, religion: e.currentTarget.value })
+                }
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Caste</Label>
+              <Input
+                value={form.caste}
+                onChange={(e) =>
+                  setForm({ ...form, caste: e.currentTarget.value })
+                }
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Gender</Label>
+              <div className="flex h-8 items-center gap-5">
+                {["Male", "Female"].map((gender) => (
+                  <label
+                    key={gender}
+                    className="flex items-center gap-2 text-sm font-medium"
+                  >
+                    <input
+                      type="radio"
+                      name="gender"
+                      value={gender}
+                      checked={form.gender === gender}
+                      onChange={() => setForm({ ...form, gender })}
+                      className="size-4 accent-primary"
+                    />
+                    {gender}
+                  </label>
+                ))}
+              </div>
             </div>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="flex flex-col gap-2">
-              <Label>Aadhar</Label>
+              <Label>Aadhar No.</Label>
               <Input
                 value={form.aadhar}
                 onChange={(e) =>
@@ -195,7 +376,7 @@ export function Admission({
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label>Student phone</Label>
+              <Label>Student Phone</Label>
               <Input
                 value={form.student_phone}
                 onChange={(e) =>
@@ -204,7 +385,7 @@ export function Admission({
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label>Parent phone</Label>
+              <Label>Parent Phone</Label>
               <Input
                 value={form.parent_phone}
                 onChange={(e) =>
@@ -224,59 +405,12 @@ export function Admission({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            {[1, 2, 3, 4].map((year) => (
-              <div key={year} className="flex flex-col gap-2">
-                <Label>Year {year} fee</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  value={form[`fee_year_${year}` as keyof typeof form] as number}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      [`fee_year_${year}`]: Number(e.currentTarget.value),
-                    })
-                  }
-                />
-              </div>
-            ))}
-          </div>
-
           <div className="flex justify-end">
             <Button>
               <UserPlus className="size-4" />
               Save admission
             </Button>
           </div>
-        </CardContent>
-      </Card>
-
-      <Card className="h-fit">
-        <CardHeader>
-          <CardTitle>Course info</CardTitle>
-          <CardDescription>
-            Duration is read from the selected course.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <Info
-            label="Duration"
-            value={
-              selectedCourse
-                ? `${selectedCourse.duration} ${selectedCourse.duration_type}`
-                : "Select course"
-            }
-          />
-          <Info
-            label="Branch scope"
-            value={
-              me.role === "admin"
-                ? "All branches"
-                : (me.branch_name ?? "Assigned branch")
-            }
-          />
-          <Info label="Academic year" value="Starts in September" />
         </CardContent>
       </Card>
     </form>

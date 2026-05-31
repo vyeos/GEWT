@@ -44,6 +44,8 @@ export type Student = {
   course_duration_type: "year" | "semester";
   student_name: string;
   category: string;
+  religion: string;
+  caste: string;
   gender: string;
   aadhar: string;
   address: string;

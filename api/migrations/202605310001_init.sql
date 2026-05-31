@@ -65,6 +65,8 @@ CREATE TABLE students (
   course_id uuid NOT NULL REFERENCES courses(id),
   student_name text NOT NULL,
   category text NOT NULL,
+  religion text NOT NULL DEFAULT '',
+  caste text NOT NULL DEFAULT '',
   gender text NOT NULL CHECK (gender IN ('Male', 'Female')),
   aadhar text NOT NULL DEFAULT '',
   address text NOT NULL DEFAULT '',

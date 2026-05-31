@@ -107,6 +107,8 @@ struct Student {
     course_duration_type: String,
     student_name: String,
     category: String,
+    religion: String,
+    caste: String,
     gender: String,
     aadhar: String,
     address: String,
@@ -152,13 +154,26 @@ struct LoginResponse {
     token: String,
 }
 
+#[derive(Serialize)]
+struct NextFormNoResponse {
+    form_no: String,
+}
+
+#[derive(Serialize)]
+struct NextReceiptNoResponse {
+    receipt_no: String,
+}
+
 #[derive(Deserialize)]
 struct StudentRequest {
+    form_no: Option<String>,
     admission_date: NaiveDate,
     branch_id: Uuid,
     course_id: Uuid,
     student_name: String,
     category: String,
+    religion: String,
+    caste: String,
     gender: String,
     aadhar: String,
     address: String,
@@ -172,6 +187,7 @@ struct StudentRequest {
 
 #[derive(Deserialize)]
 struct ReceiptRequest {
+    receipt_no: Option<String>,
     student_id: Uuid,
     receipt_date: NaiveDate,
     amount_paid: f64,
@@ -210,7 +226,10 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".to_string());
-    let pool = PgPoolOptions::new().max_connections(8).connect(&database_url).await?;
+    let pool = PgPoolOptions::new()
+        .max_connections(8)
+        .connect(&database_url)
+        .await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
 
     let app = Router::new()
@@ -219,8 +238,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/me", get(me))
         .route("/branches", get(branches))
         .route("/courses", get(courses).post(create_course))
+        .route("/students/next-form-no", get(next_form_no))
         .route("/students", get(students).post(create_student))
         .route("/students/:id", get(student).patch(update_student))
+        .route("/receipts/next-receipt-no", get(next_receipt_no))
         .route("/receipts", get(receipts).post(create_receipt))
         .route("/receipts/:id", get(receipt))
         .route("/receipts/:id/print", get(receipt_print))
@@ -230,18 +251,26 @@ async fn main() -> anyhow::Result<()> {
         .route("/backups/export", post(export_backup))
         .route("/backups/validate-import", post(validate_import))
         .route("/backups/import", post(import_backup))
-        .route("/backups/settings", get(backup_settings).patch(update_backup_settings))
+        .route(
+            "/backups/settings",
+            get(backup_settings).patch(update_backup_settings),
+        )
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(AppState { pool, jwt_secret });
 
-    let addr: SocketAddr = env::var("API_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string()).parse()?;
+    let addr: SocketAddr = env::var("API_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
+        .parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
 }
 
-async fn login(State(state): State<AppState>, Json(req): Json<LoginRequest>) -> ApiResult<Json<LoginResponse>> {
+async fn login(
+    State(state): State<AppState>,
+    Json(req): Json<LoginRequest>,
+) -> ApiResult<Json<LoginResponse>> {
     let row: (Uuid, String, String, String, Option<Uuid>) = sqlx::query_as(
         "SELECT id, name, password_hash, role, branch_id FROM users WHERE user_id = $1 AND active = true",
     )
@@ -258,7 +287,12 @@ async fn login(State(state): State<AppState>, Json(req): Json<LoginRequest>) -> 
     let exp = (Utc::now() + Duration::hours(12)).timestamp() as usize;
     let token = encode(
         &Header::default(),
-        &Claims { sub: row.0, role: row.3, branch_id: row.4, exp },
+        &Claims {
+            sub: row.0,
+            role: row.3,
+            branch_id: row.4,
+            exp,
+        },
         &EncodingKey::from_secret(state.jwt_secret.as_bytes()),
     )?;
     Ok(Json(LoginResponse { token }))
@@ -280,10 +314,15 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json
     Ok(Json(profile))
 }
 
-async fn branches(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Vec<Branch>>> {
+async fn branches(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Vec<Branch>>> {
     let auth = claims(&state, &headers)?;
     let rows = if auth.role == "admin" {
-        sqlx::query_as("SELECT id, code, name FROM branches ORDER BY name").fetch_all(&state.pool).await?
+        sqlx::query_as("SELECT id, code, name FROM branches ORDER BY name")
+            .fetch_all(&state.pool)
+            .await?
     } else {
         sqlx::query_as("SELECT id, code, name FROM branches WHERE id = $1 ORDER BY name")
             .bind(auth.branch_id.ok_or(ApiError::Forbidden)?)
@@ -293,7 +332,10 @@ async fn branches(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
     Ok(Json(rows))
 }
 
-async fn courses(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Vec<Course>>> {
+async fn courses(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Vec<Course>>> {
     let auth = claims(&state, &headers)?;
     let rows = if auth.role == "admin" {
         sqlx::query_as("SELECT id, branch_id, name, duration, duration_type FROM courses WHERE active = true ORDER BY name")
@@ -308,7 +350,11 @@ async fn courses(State(state): State<AppState>, headers: HeaderMap) -> ApiResult
     Ok(Json(rows))
 }
 
-async fn create_course(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<CourseRequest>) -> ApiResult<Json<Course>> {
+async fn create_course(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CourseRequest>,
+) -> ApiResult<Json<Course>> {
     require_admin(&state, &headers)?;
     let row = sqlx::query_as(
         "INSERT INTO courses (branch_id, name, duration, duration_type) VALUES ($1, $2, $3, $4)
@@ -323,26 +369,39 @@ async fn create_course(State(state): State<AppState>, headers: HeaderMap, Json(r
     Ok(Json(row))
 }
 
-async fn students(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Vec<Student>>> {
+async fn students(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Vec<Student>>> {
     let auth = claims(&state, &headers)?;
-    Ok(Json(load_students(&state.pool, auth.branch_id.filter(|_| auth.role != "admin")).await?))
+    Ok(Json(
+        load_students(&state.pool, auth.branch_id.filter(|_| auth.role != "admin")).await?,
+    ))
 }
 
-async fn student(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<Uuid>) -> ApiResult<Json<Student>> {
+async fn student(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<Student>> {
     let auth = claims(&state, &headers)?;
     let row = load_student(&state.pool, id).await?;
     ensure_branch(&auth, row.branch_id)?;
     Ok(Json(row))
 }
 
-async fn create_student(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<StudentRequest>) -> ApiResult<Json<Student>> {
+async fn create_student(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<StudentRequest>,
+) -> ApiResult<Json<Student>> {
     let auth = claims(&state, &headers)?;
     ensure_branch(&auth, req.branch_id)?;
     let mut tx = state.pool.begin().await?;
-    let form_no = next_number(&mut tx, "student_form").await?;
+    let form_no = resolve_student_form_no(&mut tx, req.form_no.as_deref()).await?;
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO students (form_no, admission_date, branch_id, course_id, student_name, category, gender, aadhar, address, student_phone, parent_phone, fee_year_1, fee_year_2, fee_year_3, fee_year_4, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+        "INSERT INTO students (form_no, admission_date, branch_id, course_id, student_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone, fee_year_1, fee_year_2, fee_year_3, fee_year_4, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
          RETURNING id",
     )
     .bind(form_no)
@@ -351,6 +410,8 @@ async fn create_student(State(state): State<AppState>, headers: HeaderMap, Json(
     .bind(req.course_id)
     .bind(req.student_name)
     .bind(req.category)
+    .bind(req.religion)
+    .bind(req.caste)
     .bind(req.gender)
     .bind(req.aadhar)
     .bind(req.address)
@@ -367,19 +428,26 @@ async fn create_student(State(state): State<AppState>, headers: HeaderMap, Json(
     Ok(Json(load_student(&state.pool, id).await?))
 }
 
-async fn update_student(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<Uuid>, Json(req): Json<StudentRequest>) -> ApiResult<Json<Student>> {
+async fn update_student(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(req): Json<StudentRequest>,
+) -> ApiResult<Json<Student>> {
     let auth = claims(&state, &headers)?;
     ensure_branch(&auth, req.branch_id)?;
     let existing = load_student(&state.pool, id).await?;
     ensure_branch(&auth, existing.branch_id)?;
     sqlx::query(
-        "UPDATE students SET admission_date=$1, branch_id=$2, course_id=$3, student_name=$4, category=$5, gender=$6, aadhar=$7, address=$8, student_phone=$9, parent_phone=$10, fee_year_1=$11, fee_year_2=$12, fee_year_3=$13, fee_year_4=$14, updated_at=now() WHERE id=$15",
+        "UPDATE students SET admission_date=$1, branch_id=$2, course_id=$3, student_name=$4, category=$5, religion=$6, caste=$7, gender=$8, aadhar=$9, address=$10, student_phone=$11, parent_phone=$12, fee_year_1=$13, fee_year_2=$14, fee_year_3=$15, fee_year_4=$16, updated_at=now() WHERE id=$17",
     )
     .bind(req.admission_date)
     .bind(req.branch_id)
     .bind(req.course_id)
     .bind(req.student_name)
     .bind(req.category)
+    .bind(req.religion)
+    .bind(req.caste)
     .bind(req.gender)
     .bind(req.aadhar)
     .bind(req.address)
@@ -395,7 +463,30 @@ async fn update_student(State(state): State<AppState>, headers: HeaderMap, Path(
     Ok(Json(load_student(&state.pool, id).await?))
 }
 
-async fn receipts(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Vec<Receipt>>> {
+async fn next_form_no(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<NextFormNoResponse>> {
+    claims(&state, &headers)?;
+    Ok(Json(NextFormNoResponse {
+        form_no: peek_number(&state.pool, "student_form").await?,
+    }))
+}
+
+async fn next_receipt_no(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<NextReceiptNoResponse>> {
+    claims(&state, &headers)?;
+    Ok(Json(NextReceiptNoResponse {
+        receipt_no: peek_number(&state.pool, "receipt").await?,
+    }))
+}
+
+async fn receipts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Vec<Receipt>>> {
     let auth = claims(&state, &headers)?;
     let rows = if auth.role == "admin" {
         sqlx::query_as("SELECT id, receipt_no, receipt_date, student_id, branch_id, amount_paid::float8 AS amount_paid, payment_mode, reference_no FROM receipts ORDER BY receipt_no DESC")
@@ -410,18 +501,27 @@ async fn receipts(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
     Ok(Json(rows))
 }
 
-async fn create_receipt(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<ReceiptRequest>) -> ApiResult<Json<Receipt>> {
+async fn create_receipt(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ReceiptRequest>,
+) -> ApiResult<Json<Receipt>> {
     let auth = claims(&state, &headers)?;
     if req.amount_paid <= 0.0 {
         return Err(ApiError::BadRequest("Amount paid is required".to_string()));
     }
     if req.payment_mode != "Cash" && req.reference_no.as_deref().unwrap_or("").is_empty() {
-        return Err(ApiError::BadRequest("Reference number is required for this payment mode".to_string()));
+        return Err(ApiError::BadRequest(
+            "Reference number is required for this payment mode".to_string(),
+        ));
     }
-    let branch_id: Uuid = sqlx::query_scalar("SELECT branch_id FROM students WHERE id=$1").bind(req.student_id).fetch_one(&state.pool).await?;
+    let branch_id: Uuid = sqlx::query_scalar("SELECT branch_id FROM students WHERE id=$1")
+        .bind(req.student_id)
+        .fetch_one(&state.pool)
+        .await?;
     ensure_branch(&auth, branch_id)?;
     let mut tx = state.pool.begin().await?;
-    let receipt_no = next_number(&mut tx, "receipt").await?.parse::<i64>().unwrap_or(1);
+    let receipt_no = resolve_receipt_no(&mut tx, req.receipt_no.as_deref()).await?;
     let row = sqlx::query_as(
         "INSERT INTO receipts (receipt_no, receipt_date, student_id, branch_id, amount_paid, payment_mode, reference_no, created_by)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -441,7 +541,11 @@ async fn create_receipt(State(state): State<AppState>, headers: HeaderMap, Json(
     Ok(Json(row))
 }
 
-async fn receipt(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<Uuid>) -> ApiResult<Json<Receipt>> {
+async fn receipt(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<Receipt>> {
     let auth = claims(&state, &headers)?;
     let row: Receipt = sqlx::query_as("SELECT id, receipt_no, receipt_date, student_id, branch_id, amount_paid::float8 AS amount_paid, payment_mode, reference_no FROM receipts WHERE id=$1")
         .bind(id)
@@ -451,7 +555,11 @@ async fn receipt(State(state): State<AppState>, headers: HeaderMap, Path(id): Pa
     Ok(Json(row))
 }
 
-async fn receipt_print(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<Uuid>) -> ApiResult<impl IntoResponse> {
+async fn receipt_print(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
     let Json(row) = receipt(State(state), headers, Path(id)).await?;
     Ok(axum::response::Html(format!(
         "<html><body><h1>GEWT Receipt #{}</h1><p>Date: {}</p><p>Amount: {}</p><script>window.print()</script></body></html>",
@@ -459,16 +567,25 @@ async fn receipt_print(State(state): State<AppState>, headers: HeaderMap, Path(i
     )))
 }
 
-async fn outstanding(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Vec<OutstandingRow>>> {
+async fn outstanding(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Vec<OutstandingRow>>> {
     let auth = claims(&state, &headers)?;
-    let settings_month: i32 = sqlx::query_scalar("SELECT academic_year_start_month FROM academic_settings").fetch_one(&state.pool).await?;
-    let all_students = load_students(&state.pool, auth.branch_id.filter(|_| auth.role != "admin")).await?;
-    let mut rows = Vec::new();
-    for student in all_students {
-        let paid: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(amount_paid),0)::float8 FROM receipts WHERE student_id=$1")
-            .bind(student.id)
+    let settings_month: i32 =
+        sqlx::query_scalar("SELECT academic_year_start_month FROM academic_settings")
             .fetch_one(&state.pool)
             .await?;
+    let all_students =
+        load_students(&state.pool, auth.branch_id.filter(|_| auth.role != "admin")).await?;
+    let mut rows = Vec::new();
+    for student in all_students {
+        let paid: f64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(amount_paid),0)::float8 FROM receipts WHERE student_id=$1",
+        )
+        .bind(student.id)
+        .fetch_one(&state.pool)
+        .await?;
         let (due, label) = due_for_student(&student, settings_month);
         let pending = (due - paid).max(0.0);
         if pending > 0.0 {
@@ -491,10 +608,18 @@ async fn outstanding(State(state): State<AppState>, headers: HeaderMap) -> ApiRe
 
 async fn users(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Vec<User>>> {
     require_admin(&state, &headers)?;
-    Ok(Json(sqlx::query_as("SELECT id, user_id, name, role, branch_id FROM users ORDER BY name").fetch_all(&state.pool).await?))
+    Ok(Json(
+        sqlx::query_as("SELECT id, user_id, name, role, branch_id FROM users ORDER BY name")
+            .fetch_all(&state.pool)
+            .await?,
+    ))
 }
 
-async fn update_settings(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<SettingsRequest>) -> ApiResult<Json<serde_json::Value>> {
+async fn update_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SettingsRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
     require_admin(&state, &headers)?;
     sqlx::query("UPDATE academic_settings SET academic_year_start_month=$1, backups_enabled=$2, updated_at=now() WHERE id=true")
         .bind(req.academic_year_start_month)
@@ -504,18 +629,34 @@ async fn update_settings(State(state): State<AppState>, headers: HeaderMap, Json
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn export_backup(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<BackupExportRequest>) -> ApiResult<impl IntoResponse> {
+async fn export_backup(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<BackupExportRequest>,
+) -> ApiResult<impl IntoResponse> {
     let auth = claims(&state, &headers)?;
     let backup_id = Uuid::new_v4();
-    let file_name = format!("gewt-{}-{}.dump", Utc::now().format("%Y%m%d%H%M%S"), backup_id);
+    let file_name = format!(
+        "gewt-{}-{}.dump",
+        Utc::now().format("%Y%m%d%H%M%S"),
+        backup_id
+    );
     let metadata = json!({ "format": req.format.unwrap_or_else(|| "postgres_dump".to_string()), "backup_id": backup_id, "created_at": Utc::now() });
-    let database_url = env::var("DATABASE_URL").map_err(|_| ApiError::BadRequest("DATABASE_URL is not configured".to_string()))?;
+    let database_url = env::var("DATABASE_URL")
+        .map_err(|_| ApiError::BadRequest("DATABASE_URL is not configured".to_string()))?;
     let output = Command::new("pg_dump")
-        .args(["--format=custom", "--no-owner", "--no-privileges", &database_url])
+        .args([
+            "--format=custom",
+            "--no-owner",
+            "--no-privileges",
+            &database_url,
+        ])
         .output()
         .map_err(|err| ApiError::BadRequest(format!("pg_dump failed to start: {err}")))?;
     if !output.status.success() {
-        return Err(ApiError::BadRequest(String::from_utf8_lossy(&output.stderr).to_string()));
+        return Err(ApiError::BadRequest(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
     }
     sqlx::query("INSERT INTO backup_audit_logs (admin_user_id, action, file_name, file_metadata, result) VALUES ($1,$2,$3,$4,$5)")
         .bind(auth.sub)
@@ -526,21 +667,39 @@ async fn export_backup(State(state): State<AppState>, headers: HeaderMap, Json(r
         .execute(&state.pool)
         .await?;
     let mut response_headers = HeaderMap::new();
-    response_headers.insert("content-type", "application/octet-stream".parse().expect("static header"));
+    response_headers.insert(
+        "content-type",
+        "application/octet-stream".parse().expect("static header"),
+    );
     response_headers.insert(
         "content-disposition",
-        format!("attachment; filename=\"{file_name}\"").parse().expect("valid filename header"),
+        format!("attachment; filename=\"{file_name}\"")
+            .parse()
+            .expect("valid filename header"),
     );
-    response_headers.insert("x-gewt-backup-id", backup_id.to_string().parse().expect("uuid header"));
+    response_headers.insert(
+        "x-gewt-backup-id",
+        backup_id.to_string().parse().expect("uuid header"),
+    );
     Ok((response_headers, output.stdout))
 }
 
-async fn validate_import(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<BackupImportRequest>) -> ApiResult<Json<serde_json::Value>> {
+async fn validate_import(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<BackupImportRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
     require_admin(&state, &headers)?;
-    Ok(Json(json!({ "valid": true, "file_name": req.file_name, "summary": { "mode": "merge", "conflicts": 0 } })))
+    Ok(Json(
+        json!({ "valid": true, "file_name": req.file_name, "summary": { "mode": "merge", "conflicts": 0 } }),
+    ))
 }
 
-async fn import_backup(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<BackupImportRequest>) -> ApiResult<Json<serde_json::Value>> {
+async fn import_backup(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<BackupImportRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
     let auth = require_admin(&state, &headers)?;
     let policy = req.conflict_policy.unwrap_or_else(|| "stop".to_string());
     if !["backup_wins", "cloud_wins", "stop"].contains(&policy.as_str()) {
@@ -558,7 +717,9 @@ async fn import_backup(State(state): State<AppState>, headers: HeaderMap, Json(r
 }
 
 async fn backup_settings(Query(params): Query<HashMap<String, String>>) -> Json<serde_json::Value> {
-    Json(json!({ "machine_id": params.get("machine_id"), "frequency": "monthly", "custom_days": null, "location": "" }))
+    Json(
+        json!({ "machine_id": params.get("machine_id"), "frequency": "monthly", "custom_days": null, "location": "" }),
+    )
 }
 
 async fn update_backup_settings(Json(body): Json<serde_json::Value>) -> Json<serde_json::Value> {
@@ -566,9 +727,17 @@ async fn update_backup_settings(Json(body): Json<serde_json::Value>) -> Json<ser
 }
 
 fn claims(state: &AppState, headers: &HeaderMap) -> ApiResult<Claims> {
-    let auth = headers.get("authorization").and_then(|value| value.to_str().ok()).ok_or(ApiError::Unauthorized)?;
+    let auth = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .ok_or(ApiError::Unauthorized)?;
     let token = auth.strip_prefix("Bearer ").ok_or(ApiError::Unauthorized)?;
-    Ok(decode::<Claims>(token, &DecodingKey::from_secret(state.jwt_secret.as_bytes()), &Validation::default())?.claims)
+    Ok(decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
+        &Validation::default(),
+    )?
+    .claims)
 }
 
 fn require_admin(state: &AppState, headers: &HeaderMap) -> ApiResult<Claims> {
@@ -588,11 +757,15 @@ fn ensure_branch(auth: &Claims, branch_id: Uuid) -> ApiResult<()> {
 }
 
 async fn next_number(tx: &mut Transaction<'_, Postgres>, key: &str) -> ApiResult<String> {
-    let (next_value, padding): (i64, i32) = sqlx::query_as("SELECT next_value, padding FROM numbering_rules WHERE key=$1 FOR UPDATE")
+    let (next_value, padding): (i64, i32) =
+        sqlx::query_as("SELECT next_value, padding FROM numbering_rules WHERE key=$1 FOR UPDATE")
+            .bind(key)
+            .fetch_one(&mut **tx)
+            .await?;
+    sqlx::query("UPDATE numbering_rules SET next_value = next_value + 1 WHERE key=$1")
         .bind(key)
-        .fetch_one(&mut **tx)
+        .execute(&mut **tx)
         .await?;
-    sqlx::query("UPDATE numbering_rules SET next_value = next_value + 1 WHERE key=$1").bind(key).execute(&mut **tx).await?;
     if padding > 0 {
         Ok(format!("{:0width$}", next_value, width = padding as usize))
     } else {
@@ -600,22 +773,98 @@ async fn next_number(tx: &mut Transaction<'_, Postgres>, key: &str) -> ApiResult
     }
 }
 
+async fn peek_number(pool: &PgPool, key: &str) -> ApiResult<String> {
+    let (next_value, padding): (i64, i32) =
+        sqlx::query_as("SELECT next_value, padding FROM numbering_rules WHERE key=$1")
+            .bind(key)
+            .fetch_one(pool)
+            .await?;
+    if padding > 0 {
+        Ok(format!("{:0width$}", next_value, width = padding as usize))
+    } else {
+        Ok(next_value.to_string())
+    }
+}
+
+async fn resolve_student_form_no(
+    tx: &mut Transaction<'_, Postgres>,
+    form_no: Option<&str>,
+) -> ApiResult<String> {
+    let Some(form_no) = form_no.map(str::trim).filter(|value| !value.is_empty()) else {
+        return next_number(tx, "student_form").await;
+    };
+    let (next_value, _padding): (i64, i32) =
+        sqlx::query_as("SELECT next_value, padding FROM numbering_rules WHERE key=$1 FOR UPDATE")
+            .bind("student_form")
+            .fetch_one(&mut **tx)
+            .await?;
+    if let Ok(value) = form_no.parse::<i64>() {
+        if value >= next_value {
+            sqlx::query("UPDATE numbering_rules SET next_value = $1 WHERE key=$2")
+                .bind(value + 1)
+                .bind("student_form")
+                .execute(&mut **tx)
+                .await?;
+        }
+    }
+    Ok(form_no.to_string())
+}
+
+async fn resolve_receipt_no(
+    tx: &mut Transaction<'_, Postgres>,
+    receipt_no: Option<&str>,
+) -> ApiResult<i64> {
+    let Some(receipt_no) = receipt_no.map(str::trim).filter(|value| !value.is_empty()) else {
+        return next_number(tx, "receipt")
+            .await?
+            .parse::<i64>()
+            .map_err(|_| ApiError::BadRequest("Receipt number must be numeric".to_string()));
+    };
+    let value = receipt_no
+        .parse::<i64>()
+        .map_err(|_| ApiError::BadRequest("Receipt number must be numeric".to_string()))?;
+    let (next_value, _padding): (i64, i32) =
+        sqlx::query_as("SELECT next_value, padding FROM numbering_rules WHERE key=$1 FOR UPDATE")
+            .bind("receipt")
+            .fetch_one(&mut **tx)
+            .await?;
+    if value >= next_value {
+        sqlx::query("UPDATE numbering_rules SET next_value = $1 WHERE key=$2")
+            .bind(value + 1)
+            .bind("receipt")
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(value)
+}
+
 async fn load_students(pool: &PgPool, branch_id: Option<Uuid>) -> ApiResult<Vec<Student>> {
     if let Some(branch_id) = branch_id {
-        sqlx::query_as(student_select("WHERE s.branch_id=$1").as_str()).bind(branch_id).fetch_all(pool).await.map_err(ApiError::from)
+        sqlx::query_as(student_select("WHERE s.branch_id=$1").as_str())
+            .bind(branch_id)
+            .fetch_all(pool)
+            .await
+            .map_err(ApiError::from)
     } else {
-        sqlx::query_as(student_select("").as_str()).fetch_all(pool).await.map_err(ApiError::from)
+        sqlx::query_as(student_select("").as_str())
+            .fetch_all(pool)
+            .await
+            .map_err(ApiError::from)
     }
 }
 
 async fn load_student(pool: &PgPool, id: Uuid) -> ApiResult<Student> {
-    sqlx::query_as(student_select("WHERE s.id=$1").as_str()).bind(id).fetch_one(pool).await.map_err(ApiError::from)
+    sqlx::query_as(student_select("WHERE s.id=$1").as_str())
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .map_err(ApiError::from)
 }
 
 fn student_select(where_clause: &str) -> String {
     format!(
         "SELECT s.id, s.form_no, s.admission_date, s.branch_id, b.name AS branch_name, s.course_id, c.name AS course_name,
-        c.duration AS course_duration, c.duration_type AS course_duration_type, s.student_name, s.category, s.gender,
+        c.duration AS course_duration, c.duration_type AS course_duration_type, s.student_name, s.category, s.religion, s.caste, s.gender,
         s.aadhar, s.address, s.student_phone, s.parent_phone,
         s.fee_year_1::float8 AS fee_year_1, s.fee_year_2::float8 AS fee_year_2, s.fee_year_3::float8 AS fee_year_3, s.fee_year_4::float8 AS fee_year_4
         FROM students s
@@ -633,9 +882,16 @@ fn due_for_student(student: &Student, academic_start_month: i32) -> (f64, String
         years_elapsed -= 1;
     }
     let current_year = (years_elapsed + 1).clamp(1, 4) as usize;
-    let fees = [student.fee_year_1, student.fee_year_2, student.fee_year_3, student.fee_year_4];
+    let fees = [
+        student.fee_year_1,
+        student.fee_year_2,
+        student.fee_year_3,
+        student.fee_year_4,
+    ];
     if student.course_duration_type == "semester" {
-        let mut semester = (current_year * 2).min(student.course_duration as usize).max(1);
+        let mut semester = (current_year * 2)
+            .min(student.course_duration as usize)
+            .max(1);
         if semester == 0 {
             semester = 1;
         }
