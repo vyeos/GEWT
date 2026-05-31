@@ -28,7 +28,11 @@ import {
 } from "@/components/ui/select";
 import { paymentModes } from "@/data/seeds";
 import { api } from "@/lib/api";
-import { getCourseBillingPeriods } from "@/lib/course-duration";
+import {
+  formatCourseYear,
+  getCourseBillingPeriods,
+  getCurrentCourseYear,
+} from "@/lib/course-duration";
 import { money, today } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Branch, Course, Me, PaymentMode, Student } from "@/types";
@@ -86,6 +90,18 @@ export function Receipt({
       : branches.filter((branch) => branch.id === me.branch_id);
   const selectedCourse = courses.find((course) => course.id === courseId);
   const selectedStudent = students.find((student) => student.id === studentId);
+  const selectedStudentYear = useMemo(
+    () =>
+      selectedStudent
+        ? formatCourseYear(
+            getCurrentCourseYear(
+              selectedStudent,
+              me.academic_year_start_month,
+            ),
+          )
+        : "",
+    [selectedStudent, me.academic_year_start_month],
+  );
   const visibleStudents = useMemo(() => {
     const query = studentSearch.trim().toLowerCase();
     return students.filter((student) => {
@@ -171,19 +187,10 @@ export function Receipt({
       selectedStudent.fee_year_3,
       selectedStudent.fee_year_4,
     ];
-
-    const admission = new Date(selectedStudent.admission_date);
-    const now = new Date();
-    const startMonth = me.academic_year_start_month;
-    const admissionAcademicYear =
-      admission.getMonth() + 1 >= startMonth
-        ? admission.getFullYear()
-        : admission.getFullYear() - 1;
-    const currentAcademicYear =
-      now.getMonth() + 1 >= startMonth
-        ? now.getFullYear()
-        : now.getFullYear() - 1;
-    const currentYear = currentAcademicYear - admissionAcademicYear + 1;
+    const currentYear = getCurrentCourseYear(
+      selectedStudent,
+      me.academic_year_start_month,
+    );
 
     const paidByType = new Map<string, number>();
     for (const r of studentReceipts) {
@@ -354,7 +361,7 @@ export function Receipt({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(10rem,14rem)]">
               <div className="flex flex-col gap-2">
                 <Label>Course</Label>
                 <Popover open={courseOpen} onOpenChange={setCourseOpen}>
@@ -538,6 +545,10 @@ export function Receipt({
                     </div>
                   </PopoverContent>
                 </Popover>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Current Year</Label>
+                <Input disabled value={selectedStudentYear} />
               </div>
             </div>
 

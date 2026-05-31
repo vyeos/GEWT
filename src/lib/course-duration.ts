@@ -58,3 +58,44 @@ export function getCourseBillingPeriods(
     };
   });
 }
+
+function academicYearFor(date: Date, academicStartMonth: number) {
+  return date.getMonth() + 1 >= academicStartMonth
+    ? date.getFullYear()
+    : date.getFullYear() - 1;
+}
+
+function ordinal(value: number) {
+  const remainder = value % 100;
+  if (remainder >= 11 && remainder <= 13) return `${value}th`;
+
+  switch (value % 10) {
+    case 1:
+      return `${value}st`;
+    case 2:
+      return `${value}nd`;
+    case 3:
+      return `${value}rd`;
+    default:
+      return `${value}th`;
+  }
+}
+
+export function getCurrentCourseYear(
+  student: Student,
+  academicStartMonth: number,
+  now = new Date(),
+) {
+  const admission = new Date(student.admission_date);
+  const currentYear =
+    academicYearFor(now, academicStartMonth) -
+    academicYearFor(admission, academicStartMonth) +
+    1;
+  const { totalYears } = getCourseDuration(student);
+
+  return Math.min(Math.max(currentYear, 1), totalYears);
+}
+
+export function formatCourseYear(year: number) {
+  return `${ordinal(year)} Year`;
+}
