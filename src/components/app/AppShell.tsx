@@ -86,7 +86,7 @@ export function AppShell({
           <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <BookOpen className="size-4" />
           </div>
-          <h1 className="text-lg font-semibold">GEWT Fees</h1>
+          <h1 className="text-lg font-semibold">GEWT</h1>
         </div>
 
         <nav className="flex flex-1 flex-col gap-1 p-2">
