@@ -3,6 +3,10 @@ name = "gewt-api"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "gewt_api"
+path = "src/lib.rs"
+
 [dependencies]
 anyhow = "1"
 argon2 = "0.5"
