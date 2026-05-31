@@ -26,18 +26,31 @@ import type { PaymentMode, Student } from "@/types";
 
 export function Receipt({
   token,
-  students,
-  onSaved,
+  refreshKey,
 }: {
   token: string;
-  students: Student[];
-  onSaved: () => void;
+  refreshKey: number;
 }) {
+  const [students, setStudents] = useState<Student[]>([]);
   const [studentId, setStudentId] = useState(students[0]?.id ?? "");
   const [mode, setMode] = useState<PaymentMode>("Cash");
   const [amount, setAmount] = useState(0);
   const [reference, setReference] = useState("");
   const requiresRef = mode !== "Cash";
+
+  useEffect(() => {
+    async function loadStudents() {
+      try {
+        setStudents(await api<Student[]>("/students", token));
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : "Unable to load students",
+        );
+      }
+    }
+
+    void loadStudents();
+  }, [token, refreshKey]);
 
   useEffect(() => {
     if (!studentId && students[0]) setStudentId(students[0].id);
@@ -61,7 +74,6 @@ export function Receipt({
         }),
       });
       toast.success("Receipt saved");
-      onSaved();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Receipt failed");
     }

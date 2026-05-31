@@ -10,15 +10,7 @@ import { Outstanding } from "@/features/outstanding/Outstanding";
 import { Receipt } from "@/features/receipt/Receipt";
 import { Utility } from "@/features/utility/Utility";
 import { api } from "@/lib/api";
-import type {
-  Branch,
-  Course,
-  Me,
-  OutstandingRow,
-  Screen,
-  Student,
-  User,
-} from "@/types";
+import type { Branch, Course, Me, Screen } from "@/types";
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem("gewt-token"));
@@ -26,36 +18,21 @@ function App() {
   const [screen, setScreen] = useState<Screen>("admission");
   const [branches, setBranches] = useState<Branch[]>(branchesSeed);
   const [courses, setCourses] = useState<Course[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
-  const [outstanding, setOutstanding] = useState<OutstandingRow[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
+  const [screenRefreshKey, setScreenRefreshKey] = useState(0);
 
   async function refresh(session = token) {
     if (!session) return;
     setLoading(true);
     try {
-      const [
-        profile,
-        branchList,
-        courseList,
-        studentList,
-        reportList,
-        userList,
-      ] = await Promise.all([
+      const [profile, branchList, courseList] = await Promise.all([
         api<Me>("/auth/me", session),
         api<Branch[]>("/branches", session),
         api<Course[]>("/courses", session),
-        api<Student[]>("/students", session),
-        api<OutstandingRow[]>("/reports/outstanding", session),
-        api<User[]>("/users", session).catch(() => []),
       ]);
       setMe(profile);
       setBranches(branchList);
       setCourses(courseList);
-      setStudents(studentList);
-      setOutstanding(reportList);
-      setUsers(userList);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Unable to load GEWT data",
@@ -63,6 +40,11 @@ function App() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function refreshCurrentScreen() {
+    await refresh();
+    setScreenRefreshKey((key) => key + 1);
   }
 
   useEffect(() => {
@@ -93,7 +75,7 @@ function App() {
       screen={screen}
       loading={loading}
       onScreenChange={setScreen}
-      onRefresh={() => void refresh()}
+      onRefresh={() => void refreshCurrentScreen()}
       onLogout={logout}
     >
       {screen === "admission" && (
@@ -102,18 +84,22 @@ function App() {
           me={me}
           branches={branches}
           courses={courses}
-          onSaved={() => void refresh()}
+          onSaved={() => void refreshCurrentScreen()}
         />
       )}
       {screen === "receipt" && (
         <Receipt
           token={token}
-          students={students}
-          onSaved={() => void refresh()}
+          refreshKey={screenRefreshKey}
         />
       )}
       {screen === "outstanding" && (
-        <Outstanding rows={outstanding} branches={branches} me={me} />
+        <Outstanding
+          token={token}
+          refreshKey={screenRefreshKey}
+          branches={branches}
+          me={me}
+        />
       )}
       {screen === "utility" && (
         <Utility
@@ -121,8 +107,8 @@ function App() {
           me={me}
           branches={branches}
           courses={courses}
-          users={users}
-          onSaved={() => void refresh()}
+          refreshKey={screenRefreshKey}
+          onSaved={() => void refreshCurrentScreen()}
         />
       )}
       {screen === "backup" && <Backup token={token} me={me} />}

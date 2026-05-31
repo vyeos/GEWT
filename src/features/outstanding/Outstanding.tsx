@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertTriangle, IndianRupee, Users } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -23,23 +24,43 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { api } from "@/lib/api";
 import { money } from "@/lib/format";
 import type { Branch, Me, OutstandingRow } from "@/types";
 
 export function Outstanding({
-  rows,
+  token,
+  refreshKey,
   branches,
   me,
 }: {
-  rows: OutstandingRow[];
+  token: string;
+  refreshKey: number;
   branches: Branch[];
   me: Me;
 }) {
+  const [rows, setRows] = useState<OutstandingRow[]>([]);
   const [branchId, setBranchId] = useState("all");
   const visible = rows.filter(
     (row) => branchId === "all" || row.branch_id === branchId,
   );
   const total = visible.reduce((sum, row) => sum + row.pending, 0);
+
+  useEffect(() => {
+    async function loadOutstanding() {
+      try {
+        setRows(await api<OutstandingRow[]>("/reports/outstanding", token));
+      } catch (error) {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Unable to load outstanding report",
+        );
+      }
+    }
+
+    void loadOutstanding();
+  }, [token, refreshKey]);
 
   return (
     <div className="flex flex-col gap-6">

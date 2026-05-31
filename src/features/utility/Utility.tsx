@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { BookOpen, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -38,16 +38,17 @@ export function Utility({
   me,
   branches,
   courses,
-  users,
+  refreshKey,
   onSaved,
 }: {
   token: string;
   me: Me;
   branches: Branch[];
   courses: Course[];
-  users: User[];
+  refreshKey: number;
   onSaved: () => void;
 }) {
+  const [users, setUsers] = useState<User[]>([]);
   const [course, setCourse] = useState({
     branch_id: branches[0]?.id ?? "",
     name: "",
@@ -58,6 +59,20 @@ export function Utility({
     academic_year_start_month: me.academic_year_start_month,
     backups_enabled: true,
   });
+
+  useEffect(() => {
+    async function loadUsers() {
+      if (me.role !== "admin") return;
+
+      try {
+        setUsers(await api<User[]>("/users", token));
+      } catch {
+        setUsers([]);
+      }
+    }
+
+    void loadUsers();
+  }, [me.role, token, refreshKey]);
 
   if (me.role !== "admin") {
     return (
