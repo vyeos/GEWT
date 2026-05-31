@@ -39,6 +39,11 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
       <Toaster richColors />
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
+          <img
+            src="/logo.png"
+            alt="GEWT logo"
+            className="mx-auto mb-3 size-20 object-contain"
+          />
           <CardTitle className="text-2xl">GEWT Fees</CardTitle>
           <CardDescription>
             Sign in to access the academic ledger

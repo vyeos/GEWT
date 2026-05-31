@@ -6,7 +6,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  BookOpen,
   Download,
   FileText,
   LogOut,
@@ -145,9 +144,11 @@ export function AppShell({
       <Toaster richColors />
       <aside className="flex w-56 flex-col border-r bg-sidebar">
         <div className="flex h-14 items-center gap-3 border-b px-4">
-          <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <BookOpen className="size-4" />
-          </div>
+          <img
+            src="/logo.png"
+            alt="GEWT logo"
+            className="size-9 shrink-0 rounded-md object-contain"
+          />
           <h1 className="text-lg font-semibold">GEWT</h1>
         </div>
 
