@@ -1,6 +1,13 @@
-import { useState, type ElementType, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ElementType,
+  type ReactNode,
+} from "react";
 import {
   BookOpen,
+  Download,
   FileText,
   LogOut,
   Moon,
@@ -24,8 +31,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import {
+  checkForUpdate,
+  downloadUpdate,
+  installAndRelaunch,
+} from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import type { Me, Screen } from "@/types";
+import type { UpdateStatus } from "@/lib/updater";
 
 const nav: { key: Screen; label: string; desc: string; icon: ElementType }[] = [
   {
@@ -76,7 +89,56 @@ export function AppShell({
   onLogout: () => void;
 }) {
   const [logoutOpen, setLogoutOpen] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({
+    state: "idle",
+  });
+  const updateRef =
+    useRef<Awaited<ReturnType<typeof checkForUpdate>>["update"]>(undefined);
   const current = nav.find((item) => item.key === screen);
+
+  useEffect(() => {
+    async function downloadPendingUpdate() {
+      setUpdateStatus({ state: "checking" });
+
+      try {
+        const result = await checkForUpdate();
+
+        if (!result.available || !result.update) {
+          setUpdateStatus({ state: "up-to-date" });
+          return;
+        }
+
+        updateRef.current = result.update;
+        setUpdateStatus({ state: "downloading", progress: 0 });
+        await downloadUpdate(result.update, (progress) => {
+          setUpdateStatus({ state: "downloading", progress });
+        });
+        setUpdateStatus({ state: "ready" });
+      } catch (error) {
+        setUpdateStatus({
+          state: "error",
+          message:
+            error instanceof Error ? error.message : "Unable to check updates",
+        });
+      }
+    }
+
+    void downloadPendingUpdate();
+  }, []);
+
+  async function restartToUpdate() {
+    if (!updateRef.current) return;
+
+    try {
+      await installAndRelaunch(updateRef.current);
+    } catch (error) {
+      setUpdateStatus({
+        state: "error",
+        message:
+          error instanceof Error ? error.message : "Unable to install update",
+      });
+    }
+  }
 
   return (
     <div className="flex h-screen">
@@ -108,6 +170,27 @@ export function AppShell({
         </nav>
 
         <div className="border-t p-3">
+          {updateStatus.state === "ready" && (
+            <Button
+              className="mb-3 w-full gap-3"
+              size="sm"
+              onClick={() => void restartToUpdate()}
+            >
+              <Download className="size-4" />
+              Restart to update
+            </Button>
+          )}
+          {updateStatus.state === "downloading" && (
+            <div className="mb-3 flex items-center gap-2 px-1 text-xs text-muted-foreground">
+              <RefreshCw className="size-3 animate-spin" />
+              <span>Updating... {updateStatus.progress}%</span>
+            </div>
+          )}
+          {updateStatus.state === "error" && (
+            <div className="mb-3 px-1 text-xs text-destructive">
+              Update check failed
+            </div>
+          )}
           <div className="flex items-center justify-between gap-3 px-1">
             <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
               {isDarkMode ? (
