@@ -4,8 +4,7 @@ export type Screen =
   | "admission"
   | "receipt"
   | "outstanding"
-  | "utility"
-  | "backup";
+  | "utility";
 
 export type PaymentMode = "Cash" | "UPI" | "DD" | "Cheque" | "NEFT" | "RTGS";
 

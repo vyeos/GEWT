@@ -4,7 +4,6 @@ import "./App.css";
 import { AppShell } from "@/components/app/AppShell";
 import { branchesSeed } from "@/data/seeds";
 import { Admission } from "@/features/admission/Admission";
-import { Backup } from "@/features/backup/Backup";
 import { Login } from "@/features/login/Login";
 import { Outstanding } from "@/features/outstanding/Outstanding";
 import { Receipt } from "@/features/receipt/Receipt";
@@ -113,7 +112,6 @@ function App() {
           onSaved={() => void refreshCurrentScreen()}
         />
       )}
-      {screen === "backup" && <Backup token={token} me={me} />}
     </AppShell>
   );
 }

@@ -1,6 +1,5 @@
 import { useState, type ElementType, type ReactNode } from "react";
 import {
-  Archive,
   BookOpen,
   FileText,
   LogOut,
@@ -49,12 +48,6 @@ const nav: { key: Screen; label: string; desc: string; icon: ElementType }[] = [
     label: "Utility",
     desc: "Courses, users & settings",
     icon: Settings,
-  },
-  {
-    key: "backup",
-    label: "Backup/Import",
-    desc: "Data backup & recovery",
-    icon: Archive,
   },
 ];
 

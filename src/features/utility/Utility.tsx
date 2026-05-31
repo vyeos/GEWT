@@ -20,7 +20,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -57,7 +56,6 @@ export function Utility({
   });
   const [settings, setSettings] = useState({
     academic_year_start_month: me.academic_year_start_month,
-    backups_enabled: true,
   });
 
   useEffect(() => {
@@ -80,8 +78,7 @@ export function Utility({
         <CardHeader>
           <CardTitle>Employee Utility</CardTitle>
           <CardDescription>
-            Backup settings are available on the Backup/Import screen. Admin
-            utilities are hidden for employee users.
+            Admin utilities are hidden for employee users.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -277,7 +274,7 @@ export function Utility({
       <TabsContent value="settings" className="mt-4">
         <Card className="max-w-xl">
           <CardHeader>
-            <CardTitle>Academic and backup settings</CardTitle>
+            <CardTitle>Academic settings</CardTitle>
             <CardDescription>Configure system-wide preferences</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-5">
@@ -293,20 +290,6 @@ export function Utility({
                     ...settings,
                     academic_year_start_month: Number(e.currentTarget.value),
                   })
-                }
-              />
-            </div>
-            <div className="flex items-center justify-between rounded-md border p-3">
-              <div>
-                <Label>Scheduled backups</Label>
-                <p className="text-sm text-muted-foreground">
-                  Desktop clients can run local backups while open.
-                </p>
-              </div>
-              <Switch
-                checked={settings.backups_enabled}
-                onCheckedChange={(backups_enabled) =>
-                  setSettings({ ...settings, backups_enabled })
                 }
               />
             </div>

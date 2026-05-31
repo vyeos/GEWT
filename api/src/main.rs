@@ -11,7 +11,7 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, FromRow, PgPool, Postgres, Transaction};
-use std::{collections::HashMap, env, net::SocketAddr, process::Command};
+use std::{collections::HashMap, env, net::SocketAddr};
 use thiserror::Error;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use uuid::Uuid;
@@ -208,19 +208,6 @@ struct CourseRequest {
 #[derive(Deserialize)]
 struct SettingsRequest {
     academic_year_start_month: i32,
-    backups_enabled: bool,
-}
-
-#[derive(Deserialize)]
-struct BackupExportRequest {
-    format: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct BackupImportRequest {
-    file_name: String,
-    conflict_policy: Option<String>,
-    metadata: Option<serde_json::Value>,
 }
 
 #[tokio::main]
@@ -252,13 +239,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/reports/outstanding", get(outstanding))
         .route("/users", get(users))
         .route("/academic-settings", patch(update_settings))
-        .route("/backups/export", post(export_backup))
-        .route("/backups/validate-import", post(validate_import))
-        .route("/backups/import", post(import_backup))
-        .route(
-            "/backups/settings",
-            get(backup_settings).patch(update_backup_settings),
-        )
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(AppState { pool, jwt_secret });
@@ -649,109 +629,13 @@ async fn update_settings(
     Json(req): Json<SettingsRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
     require_admin(&state, &headers)?;
-    sqlx::query("UPDATE academic_settings SET academic_year_start_month=$1, backups_enabled=$2, updated_at=now() WHERE id=true")
-        .bind(req.academic_year_start_month)
-        .bind(req.backups_enabled)
-        .execute(&state.pool)
-        .await?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-async fn export_backup(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<BackupExportRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let auth = claims(&state, &headers)?;
-    let backup_id = Uuid::new_v4();
-    let file_name = format!(
-        "gewt-{}-{}.dump",
-        Utc::now().format("%Y%m%d%H%M%S"),
-        backup_id
-    );
-    let metadata = json!({ "format": req.format.unwrap_or_else(|| "postgres_dump".to_string()), "backup_id": backup_id, "created_at": Utc::now() });
-    let database_url = env::var("DATABASE_URL")
-        .map_err(|_| ApiError::BadRequest("DATABASE_URL is not configured".to_string()))?;
-    let output = Command::new("pg_dump")
-        .args([
-            "--format=custom",
-            "--no-owner",
-            "--no-privileges",
-            &database_url,
-        ])
-        .output()
-        .map_err(|err| ApiError::BadRequest(format!("pg_dump failed to start: {err}")))?;
-    if !output.status.success() {
-        return Err(ApiError::BadRequest(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
-    }
-    sqlx::query("INSERT INTO backup_audit_logs (admin_user_id, action, file_name, file_metadata, result) VALUES ($1,$2,$3,$4,$5)")
-        .bind(auth.sub)
-        .bind("export")
-        .bind(&file_name)
-        .bind(&metadata)
-        .bind("completed")
-        .execute(&state.pool)
-        .await?;
-    let mut response_headers = HeaderMap::new();
-    response_headers.insert(
-        "content-type",
-        "application/octet-stream".parse().expect("static header"),
-    );
-    response_headers.insert(
-        "content-disposition",
-        format!("attachment; filename=\"{file_name}\"")
-            .parse()
-            .expect("valid filename header"),
-    );
-    response_headers.insert(
-        "x-gewt-backup-id",
-        backup_id.to_string().parse().expect("uuid header"),
-    );
-    Ok((response_headers, output.stdout))
-}
-
-async fn validate_import(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<BackupImportRequest>,
-) -> ApiResult<Json<serde_json::Value>> {
-    require_admin(&state, &headers)?;
-    Ok(Json(
-        json!({ "valid": true, "file_name": req.file_name, "summary": { "mode": "merge", "conflicts": 0 } }),
-    ))
-}
-
-async fn import_backup(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<BackupImportRequest>,
-) -> ApiResult<Json<serde_json::Value>> {
-    let auth = require_admin(&state, &headers)?;
-    let policy = req.conflict_policy.unwrap_or_else(|| "stop".to_string());
-    if !["backup_wins", "cloud_wins", "stop"].contains(&policy.as_str()) {
-        return Err(ApiError::BadRequest("Invalid conflict policy".to_string()));
-    }
-    sqlx::query("INSERT INTO backup_audit_logs (admin_user_id, action, file_name, file_metadata, result) VALUES ($1,$2,$3,$4,$5)")
-        .bind(auth.sub)
-        .bind("import")
-        .bind(req.file_name)
-        .bind(req.metadata.unwrap_or_else(|| json!({})))
-        .bind(format!("merge policy: {policy}"))
-        .execute(&state.pool)
-        .await?;
-    Ok(Json(json!({ "ok": true, "policy": policy })))
-}
-
-async fn backup_settings(Query(params): Query<HashMap<String, String>>) -> Json<serde_json::Value> {
-    Json(
-        json!({ "machine_id": params.get("machine_id"), "frequency": "monthly", "custom_days": null, "location": "" }),
+    sqlx::query(
+        "UPDATE academic_settings SET academic_year_start_month=$1, updated_at=now() WHERE id=true",
     )
-}
-
-async fn update_backup_settings(Json(body): Json<serde_json::Value>) -> Json<serde_json::Value> {
-    Json(json!({ "ok": true, "settings": body }))
+    .bind(req.academic_year_start_month)
+    .execute(&state.pool)
+    .await?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 fn claims(state: &AppState, headers: &HeaderMap) -> ApiResult<Claims> {
