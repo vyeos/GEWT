@@ -1,4 +1,7 @@
-use argon2::{password_hash::PasswordHash, Argon2, PasswordVerifier};
+use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, SaltString},
+    Argon2, PasswordVerifier,
+};
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -206,6 +209,15 @@ struct CourseRequest {
 }
 
 #[derive(Deserialize)]
+struct UserRequest {
+    user_id: String,
+    name: String,
+    role: String,
+    branch_id: Option<Uuid>,
+    password: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct SettingsRequest {
     academic_year_start_month: i32,
 }
@@ -229,6 +241,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/me", get(me))
         .route("/branches", get(branches))
         .route("/courses", get(courses).post(create_course))
+        .route("/courses/:id", patch(update_course))
         .route("/students/next-form-no", get(next_form_no))
         .route("/students", get(students).post(create_student))
         .route("/students/:id", get(student).patch(update_student))
@@ -237,7 +250,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/receipts/:id", get(receipt))
         .route("/receipts/:id/print", get(receipt_print))
         .route("/reports/outstanding", get(outstanding))
-        .route("/users", get(users))
+        .route("/users", get(users).post(create_user))
+        .route("/users/:id", patch(update_user))
         .route("/academic-settings", patch(update_settings))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -348,6 +362,29 @@ async fn create_course(
     .bind(req.name)
     .bind(req.duration)
     .bind(req.duration_type)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(row))
+}
+
+async fn update_course(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(req): Json<CourseRequest>,
+) -> ApiResult<Json<Course>> {
+    require_admin(&state, &headers)?;
+    let row = sqlx::query_as(
+        "UPDATE courses
+         SET branch_id = $1, name = $2, duration = $3, duration_type = $4
+         WHERE id = $5 AND active = true
+         RETURNING id, branch_id, name, duration, duration_type",
+    )
+    .bind(req.branch_id)
+    .bind(req.name)
+    .bind(req.duration)
+    .bind(req.duration_type)
+    .bind(id)
     .fetch_one(&state.pool)
     .await?;
     Ok(Json(row))
@@ -623,6 +660,81 @@ async fn users(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<J
     ))
 }
 
+async fn create_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<UserRequest>,
+) -> ApiResult<Json<User>> {
+    require_admin(&state, &headers)?;
+    let (user_id, name, role, branch_id) = normalize_user_request(&req)?;
+    let password = req
+        .password
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("Password is required".to_string()))?;
+    let password_hash = hash_password(password)?;
+    let row = sqlx::query_as(
+        "INSERT INTO users (user_id, name, password_hash, role, branch_id)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, user_id, name, role, branch_id",
+    )
+    .bind(user_id)
+    .bind(name)
+    .bind(password_hash)
+    .bind(role)
+    .bind(branch_id)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(row))
+}
+
+async fn update_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UserRequest>,
+) -> ApiResult<Json<User>> {
+    require_admin(&state, &headers)?;
+    let (user_id, name, role, branch_id) = normalize_user_request(&req)?;
+    let row = if let Some(password) = req
+        .password
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        sqlx::query_as(
+            "UPDATE users
+             SET user_id=$1, name=$2, role=$3, branch_id=$4, password_hash=$5
+             WHERE id=$6
+             RETURNING id, user_id, name, role, branch_id",
+        )
+        .bind(user_id)
+        .bind(name)
+        .bind(role)
+        .bind(branch_id)
+        .bind(hash_password(password)?)
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?
+    } else {
+        sqlx::query_as(
+            "UPDATE users
+             SET user_id=$1, name=$2, role=$3, branch_id=$4
+             WHERE id=$5
+             RETURNING id, user_id, name, role, branch_id",
+        )
+        .bind(user_id)
+        .bind(name)
+        .bind(role)
+        .bind(branch_id)
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?
+    };
+    Ok(Json(row))
+}
+
 async fn update_settings(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -666,6 +778,40 @@ fn ensure_branch(auth: &Claims, branch_id: Uuid) -> ApiResult<()> {
     } else {
         Err(ApiError::Forbidden)
     }
+}
+
+fn normalize_user_request(req: &UserRequest) -> ApiResult<(String, String, String, Option<Uuid>)> {
+    let user_id = req.user_id.trim().to_string();
+    let name = req.name.trim().to_string();
+    let role = req.role.trim().to_string();
+    if user_id.is_empty() {
+        return Err(ApiError::BadRequest("User ID is required".to_string()));
+    }
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("Name is required".to_string()));
+    }
+    if role != "admin" && role != "employee" {
+        return Err(ApiError::BadRequest("Invalid role".to_string()));
+    }
+    if role == "employee" && req.branch_id.is_none() {
+        return Err(ApiError::BadRequest(
+            "Branch is required for employee users".to_string(),
+        ));
+    }
+    Ok((
+        user_id,
+        name,
+        role.clone(),
+        if role == "admin" { None } else { req.branch_id },
+    ))
+}
+
+fn hash_password(password: &str) -> ApiResult<String> {
+    let salt = SaltString::generate(&mut rand_core::OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(|_| ApiError::BadRequest("Could not hash password".to_string()))
 }
 
 async fn next_number(tx: &mut Transaction<'_, Postgres>, key: &str) -> ApiResult<String> {
