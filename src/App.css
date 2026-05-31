@@ -1,0 +1,59 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme {
+  --font-sans: "Aptos", "Segoe UI", system-ui, sans-serif;
+  --color-background: hsl(42 30% 97%);
+  --color-foreground: hsl(210 18% 13%);
+  --color-card: hsl(0 0% 100%);
+  --color-card-foreground: hsl(210 18% 13%);
+  --color-popover: hsl(0 0% 100%);
+  --color-popover-foreground: hsl(210 18% 13%);
+  --color-primary: hsl(171 68% 24%);
+  --color-primary-foreground: hsl(0 0% 100%);
+  --color-secondary: hsl(38 42% 88%);
+  --color-secondary-foreground: hsl(210 18% 15%);
+  --color-muted: hsl(43 26% 91%);
+  --color-muted-foreground: hsl(211 11% 40%);
+  --color-accent: hsl(16 72% 92%);
+  --color-accent-foreground: hsl(210 18% 13%);
+  --color-destructive: hsl(0 68% 43%);
+  --color-destructive-foreground: hsl(0 0% 100%);
+  --color-border: hsl(39 20% 82%);
+  --color-input: hsl(39 20% 82%);
+  --color-ring: hsl(171 68% 24%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 1080px;
+  min-height: 100vh;
+  background:
+    linear-gradient(90deg, rgb(18 71 65 / 0.06) 1px, transparent 1px),
+    linear-gradient(180deg, rgb(18 71 65 / 0.05) 1px, transparent 1px),
+    hsl(42 30% 97%);
+  background-size: 28px 28px;
+  color: hsl(210 18% 13%);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.table-grid {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  min-width: 880px;
+}
