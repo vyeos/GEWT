@@ -23,6 +23,7 @@ struct CacheState {
     env_file: PathBuf,
     api_base: Arc<RwLock<String>>,
     api_started: Arc<AtomicBool>,
+    api_error: Arc<RwLock<Option<String>>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -36,6 +37,8 @@ struct EnvConfigStatus {
     configured: bool,
     env_path: String,
     api_base: String,
+    api_ready: bool,
+    api_error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -354,7 +357,28 @@ async fn reset_cache(state: tauri::State<'_, CacheState>) -> Result<(), String> 
 async fn get_env_config_status(
     state: tauri::State<'_, CacheState>,
 ) -> Result<EnvConfigStatus, String> {
-    env_config_status(&state.env_file).await
+    let mut status = env_config_status(&state.env_file).await?;
+    if status.configured {
+        if let Err(error) = start_embedded_api(
+            state.env_file.clone(),
+            Arc::clone(&state.api_base),
+            Arc::clone(&state.api_started),
+            Arc::clone(&state.api_error),
+        )
+        .await
+        {
+            status.api_error = Some(error);
+        }
+        status.api_ready = is_api_ready(&status.api_base).await;
+        if status.api_ready {
+            let mut current_api_error = state.api_error.write().await;
+            *current_api_error = None;
+            status.api_error = None;
+        } else if status.api_error.is_none() {
+            status.api_error = state.api_error.read().await.clone();
+        }
+    }
+    Ok(status)
 }
 
 #[tauri::command]
@@ -380,7 +404,7 @@ async fn save_env_config(
     );
     std::fs::write(&state.env_file, body).map_err(|e| e.to_string())?;
 
-    let status = env_config_status(&state.env_file).await?;
+    let mut status = env_config_status(&state.env_file).await?;
     {
         let mut current_api_base = state.api_base.write().await;
         *current_api_base = status.api_base.clone();
@@ -389,9 +413,15 @@ async fn save_env_config(
         state.env_file.clone(),
         Arc::clone(&state.api_base),
         Arc::clone(&state.api_started),
+        Arc::clone(&state.api_error),
     )
     .await?;
-    wait_for_api(&status.api_base).await?;
+    status.api_ready = is_api_ready(&status.api_base).await;
+    status.api_error = if status.api_ready {
+        None
+    } else {
+        state.api_error.read().await.clone()
+    };
 
     Ok(status)
 }
@@ -444,6 +474,8 @@ async fn env_config_status(env_file: &Path) -> Result<EnvConfigStatus, String> {
         configured,
         env_path: env_file.display().to_string(),
         api_base,
+        api_ready: false,
+        api_error: None,
     })
 }
 
@@ -496,6 +528,7 @@ async fn start_embedded_api(
     env_file: PathBuf,
     api_base: Arc<RwLock<String>>,
     api_started: Arc<AtomicBool>,
+    api_error: Arc<RwLock<Option<String>>>,
 ) -> Result<(), String> {
     let status = env_config_status(&env_file).await?;
     if !status.configured {
@@ -506,6 +539,10 @@ async fn start_embedded_api(
         let mut current_api_base = api_base.write().await;
         *current_api_base = status.api_base;
     }
+    {
+        let mut current_api_error = api_error.write().await;
+        *current_api_error = None;
+    }
 
     if api_started
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -514,29 +551,40 @@ async fn start_embedded_api(
         return Ok(());
     }
 
+    let api_start_error = Arc::clone(&api_error);
     tauri::async_runtime::spawn(async move {
         if let Err(error) = gewt_api::run_with_env_file(Some(env_file)).await {
+            let mut current_api_error = api_start_error.write().await;
+            *current_api_error = Some(error.to_string());
             api_started.store(false, Ordering::SeqCst);
             eprintln!("GEWT API failed to start: {error:#}");
+        }
+    });
+
+    let readiness_api_base = api_base.read().await.clone();
+    let readiness_error = Arc::clone(&api_error);
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(20)).await;
+        if !is_api_ready(&readiness_api_base).await {
+            let mut current_api_error = readiness_error.write().await;
+            if current_api_error.is_none() {
+                *current_api_error = Some(
+                    "GEWT API did not become ready. Check PostgreSQL is running and DATABASE_URL is reachable."
+                        .to_string(),
+                );
+            }
         }
     });
 
     Ok(())
 }
 
-async fn wait_for_api(api_base: &str) -> Result<(), String> {
-    let client = reqwest::Client::new();
-    for _ in 0..80 {
-        if client.get(api_base).send().await.is_ok() {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-
-    Err(
-        "Saved settings, but GEWT API did not become ready. Check DATABASE_URL and try again."
-            .to_string(),
-    )
+async fn is_api_ready(api_base: &str) -> bool {
+    reqwest::Client::new()
+        .get(format!("{api_base}/health"))
+        .send()
+        .await
+        .is_ok_and(|response| response.status().is_success())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -558,12 +606,14 @@ pub fn run() {
 
             let api_base = Arc::new(RwLock::new(API_BASE.to_string()));
             let api_started = Arc::new(AtomicBool::new(false));
+            let api_error = Arc::new(RwLock::new(None));
 
             app.manage(CacheState {
                 pool,
                 env_file: env_file.clone(),
                 api_base: Arc::clone(&api_base),
                 api_started: Arc::clone(&api_started),
+                api_error: Arc::clone(&api_error),
             });
 
             let should_start_api = tauri::async_runtime::block_on(async {
@@ -574,7 +624,7 @@ pub fn run() {
             });
             if should_start_api {
                 tauri::async_runtime::block_on(async {
-                    start_embedded_api(env_file, api_base, api_started).await
+                    start_embedded_api(env_file, api_base, api_started, api_error).await
                 })
                 .map_err(|e| Box::new(std::io::Error::other(e)))?;
             }

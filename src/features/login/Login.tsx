@@ -32,13 +32,31 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
   const [apiAddr, setApiAddr] = useState("127.0.0.1:45123");
   const [savingConfig, setSavingConfig] = useState(false);
 
-  const needsConfig = configStatus?.configured === false;
+  const needsConfig =
+    configStatus?.configured === false ||
+    (configStatus?.configured === true && configStatus.api_ready === false);
 
   useEffect(() => {
     getEnvConfigStatus()
       .then((status) => setConfigStatus(status))
       .finally(() => setCheckingConfig(false));
   }, []);
+
+  useEffect(() => {
+    if (!configStatus?.configured || configStatus.api_ready) {
+      return;
+    }
+
+    const poll = window.setInterval(() => {
+      void getEnvConfigStatus().then((status) => {
+        if (status) {
+          setConfigStatus(status);
+        }
+      });
+    }, 1500);
+
+    return () => window.clearInterval(poll);
+  }, [configStatus?.configured, configStatus?.api_ready]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -96,7 +114,10 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
           {needsConfig ? (
             <form className="flex flex-col gap-4" onSubmit={submitConfig}>
               <div className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
-                Database settings were not found. Enter them once to continue.
+                {configStatus?.configured
+                  ? configStatus.api_error ||
+                    "Settings saved. Starting the GEWT API..."
+                  : "Database settings were not found. Enter them once to continue."}
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="databaseUrl">DATABASE_URL</Label>

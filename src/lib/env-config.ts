@@ -5,6 +5,8 @@ export type EnvConfigStatus = {
   configured: boolean;
   env_path: string;
   api_base: string;
+  api_ready: boolean;
+  api_error: string | null;
 };
 
 export type EnvConfigInput = {
