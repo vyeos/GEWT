@@ -8,8 +8,9 @@ import { Login } from "@/features/login/Login";
 import { Outstanding } from "@/features/outstanding/Outstanding";
 import { Receipt } from "@/features/receipt/Receipt";
 import { Utility } from "@/features/utility/Utility";
-import { api } from "@/lib/api";
+import { api, ApiRequestError } from "@/lib/api";
 import { syncAll } from "@/lib/cache";
+import { getEnvConfigStatus } from "@/lib/env-config";
 import type { Branch, Course, Me, Screen } from "@/types";
 
 type Theme = "light" | "dark";
@@ -25,6 +26,10 @@ function getInitialTheme(): Theme {
     : "light";
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem("gewt-token"));
   const [me, setMe] = useState<Me | null>(null);
@@ -32,11 +37,14 @@ function App() {
   const [branches, setBranches] = useState<Branch[]>(branchesSeed);
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(false);
+  const [restoringSession, setRestoringSession] = useState(
+    () => Boolean(localStorage.getItem("gewt-token")),
+  );
   const [screenRefreshKey, setScreenRefreshKey] = useState(0);
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
 
-  async function refresh(session = token) {
-    if (!session) return;
+  async function refresh(session = token, showError = true) {
+    if (!session) return false;
     setLoading(true);
     try {
       const [profile, branchList, courseList] = await Promise.all([
@@ -51,10 +59,19 @@ function App() {
       syncAll(session, profile).catch(() =>
         toast.warning("Sync incomplete — showing cached data"),
       );
+      return true;
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Unable to load GEWT data",
-      );
+      if (error instanceof ApiRequestError && error.status === 401) {
+        localStorage.removeItem("gewt-token");
+        setToken(null);
+        setMe(null);
+      }
+      if (showError) {
+        toast.error(
+          error instanceof Error ? error.message : "Unable to load GEWT data",
+        );
+      }
+      return false;
     } finally {
       setLoading(false);
     }
@@ -66,7 +83,44 @@ function App() {
   }
 
   useEffect(() => {
-    void refresh();
+    let cancelled = false;
+
+    async function restoreSavedSession() {
+      if (!token) {
+        setRestoringSession(false);
+        return;
+      }
+
+      const configStatus = await getEnvConfigStatus();
+      if (cancelled) return;
+      if (configStatus?.configured === false) {
+        setRestoringSession(false);
+        return;
+      }
+      if (configStatus?.configured && !configStatus.api_ready) {
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          await wait(250);
+          if (cancelled) return;
+
+          const nextStatus = await getEnvConfigStatus();
+          if (cancelled) return;
+          if (nextStatus?.api_ready || nextStatus?.api_error) {
+            break;
+          }
+        }
+      }
+
+      await refresh(token, false);
+      if (!cancelled) {
+        setRestoringSession(false);
+      }
+    }
+
+    void restoreSavedSession();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -78,6 +132,28 @@ function App() {
     localStorage.removeItem("gewt-token");
     setToken(null);
     setMe(null);
+  }
+
+  if (restoringSession && token && !me) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background p-4">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <img
+            src="/logo.png"
+            alt="GEWT logo"
+            className="size-16 object-contain"
+          />
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              Opening GEWT Fees
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Restoring your session...
+            </p>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (!token || !me) {

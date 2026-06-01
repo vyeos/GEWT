@@ -6,6 +6,16 @@ const BUILD_API_BASE = import.meta.env.VITE_API_BASE_URL as string | undefined;
 let apiBase = BUILD_API_BASE || DEFAULT_API_BASE;
 let runtimeApiBaseLoaded = Boolean(BUILD_API_BASE);
 
+export class ApiRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
+}
+
 export function setApiBase(nextApiBase: string) {
   apiBase = nextApiBase;
   runtimeApiBaseLoaded = true;
@@ -43,7 +53,10 @@ export async function api<T>(
   });
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(message || `Request failed: ${response.status}`);
+    throw new ApiRequestError(
+      message || `Request failed: ${response.status}`,
+      response.status,
+    );
   }
   return (await response.json()) as T;
 }
