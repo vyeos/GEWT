@@ -353,7 +353,7 @@ export function Receipt({
           receipt.optimistic_id === optimisticId ? savedReceipt : receipt,
         ),
       );
-      toast.success("Receipt saved");
+      toast.success(`Saved Receipt #${savedReceipt.receipt_no}`);
       setReceiptNo("");
       setGeneratedReceiptNo("");
       void loadNextReceiptNo();

@@ -112,7 +112,7 @@ export function Admission({
         }),
       });
       cacheStudent(savedStudent).catch(() => {});
-      toast.success("Admission saved");
+      toast.success(`Admitted Student #${savedStudent.form_no}`);
       setForm(initialForm());
       setGeneratedFormNo("");
       void loadNextFormNo();

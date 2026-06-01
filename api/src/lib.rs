@@ -1247,7 +1247,22 @@ async fn resolve_student_form_no(
     let Some(form_no) = form_no.map(str::trim).filter(|value| !value.is_empty()) else {
         return next_form_no_value(tx).await;
     };
-    Ok(form_no.to_string())
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM students WHERE form_no = $1)")
+        .bind(form_no)
+        .fetch_one(&mut **tx)
+        .await?;
+    if !exists {
+        return Ok(form_no.to_string());
+    }
+    let parsed = form_no.parse::<i64>().unwrap_or(0);
+    let next: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(CASE WHEN form_no ~ '^\\d+$' THEN form_no::bigint END), 0) + 1 FROM students WHERE CASE WHEN form_no ~ '^\\d+$' THEN form_no::bigint END >= $1",
+    )
+    .bind(parsed)
+    .fetch_one(&mut **tx)
+    .await?;
+    let result = std::cmp::max(next, parsed + 1);
+    Ok(format!("{:04}", result))
 }
 
 async fn resolve_receipt_no(
@@ -1257,9 +1272,23 @@ async fn resolve_receipt_no(
     let Some(receipt_no) = receipt_no.map(str::trim).filter(|value| !value.is_empty()) else {
         return next_receipt_no_value(tx).await;
     };
-    receipt_no
+    let parsed = receipt_no
         .parse::<i64>()
-        .map_err(|_| ApiError::BadRequest("Receipt number must be numeric".to_string()))
+        .map_err(|_| ApiError::BadRequest("Receipt number must be numeric".to_string()))?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM receipts WHERE receipt_no = $1)")
+        .bind(parsed)
+        .fetch_one(&mut **tx)
+        .await?;
+    if !exists {
+        return Ok(parsed);
+    }
+    let next: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(receipt_no), 0) + 1 FROM receipts WHERE receipt_no >= $1",
+    )
+    .bind(parsed)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(next)
 }
 
 async fn load_students(pool: &PgPool, branch_id: Option<Uuid>) -> ApiResult<Vec<Student>> {
