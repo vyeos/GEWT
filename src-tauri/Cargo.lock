@@ -1516,6 +1516,7 @@ name = "gewt"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dotenvy",
  "gewt-api",
  "reqwest 0.12.28",
  "serde",

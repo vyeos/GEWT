@@ -1,19 +1,48 @@
 mod cache;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
+use std::{
+    collections::HashMap,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use tauri::Manager;
+use tokio::sync::RwLock;
 
 const API_BASE: &str = "http://localhost:45123";
+const DEFAULT_API_ADDR: &str = "127.0.0.1:45123";
 
 struct CacheState {
     pool: SqlitePool,
+    env_file: PathBuf,
+    api_base: Arc<RwLock<String>>,
+    api_started: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Serialize)]
 struct SyncResult {
     synced_count: i64,
     is_initial: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct EnvConfigStatus {
+    configured: bool,
+    env_path: String,
+    api_base: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct EnvConfigInput {
+    database_url: String,
+    jwt_secret: String,
+    api_addr: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -42,7 +71,8 @@ async fn sync_courses(
     let mut cursor_id: Option<String> = None;
 
     loop {
-        let mut url = format!("{API_BASE}/sync/courses?limit=500");
+        let api_base = state.api_base.read().await.clone();
+        let mut url = format!("{api_base}/sync/courses?limit=500");
         append_sync_params(&mut url, &since, &until, &cursor_updated_at, &cursor_id);
 
         let resp = client
@@ -113,7 +143,8 @@ async fn sync_students(
     let mut cursor_id: Option<String> = None;
 
     loop {
-        let mut url = format!("{API_BASE}/sync/students?limit=500");
+        let api_base = state.api_base.read().await.clone();
+        let mut url = format!("{api_base}/sync/students?limit=500");
         append_sync_params(&mut url, &since, &until, &cursor_updated_at, &cursor_id);
 
         let resp = client
@@ -185,7 +216,8 @@ async fn sync_receipts(
     let mut cursor_id: Option<String> = None;
 
     loop {
-        let mut url = format!("{API_BASE}/sync/receipts?limit=500");
+        let api_base = state.api_base.read().await.clone();
+        let mut url = format!("{api_base}/sync/receipts?limit=500");
         append_sync_params(&mut url, &since, &until, &cursor_updated_at, &cursor_id);
 
         let resp = client
@@ -318,6 +350,57 @@ async fn reset_cache(state: tauri::State<'_, CacheState>) -> Result<(), String> 
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn get_env_config_status(
+    state: tauri::State<'_, CacheState>,
+) -> Result<EnvConfigStatus, String> {
+    env_config_status(&state.env_file).await
+}
+
+#[tauri::command]
+async fn save_env_config(
+    state: tauri::State<'_, CacheState>,
+    input: EnvConfigInput,
+) -> Result<EnvConfigStatus, String> {
+    let database_url = input.database_url.trim();
+    let jwt_secret = input.jwt_secret.trim();
+    if database_url.is_empty() {
+        return Err("DATABASE_URL is required".to_string());
+    }
+    if jwt_secret.is_empty() {
+        return Err("JWT_SECRET is required".to_string());
+    }
+
+    let api_addr = normalize_api_addr(input.api_addr.as_deref())?;
+    let body = format!(
+        "DATABASE_URL={}\nJWT_SECRET={}\nAPI_ADDR={}\n",
+        dotenv_quote(database_url),
+        dotenv_quote(jwt_secret),
+        dotenv_quote(&api_addr),
+    );
+    std::fs::write(&state.env_file, body).map_err(|e| e.to_string())?;
+
+    let status = env_config_status(&state.env_file).await?;
+    {
+        let mut current_api_base = state.api_base.write().await;
+        *current_api_base = status.api_base.clone();
+    }
+    start_embedded_api(
+        state.env_file.clone(),
+        Arc::clone(&state.api_base),
+        Arc::clone(&state.api_started),
+    )
+    .await?;
+    wait_for_api(&status.api_base).await?;
+
+    Ok(status)
+}
+
+#[tauri::command]
+async fn get_api_base(state: tauri::State<'_, CacheState>) -> Result<String, String> {
+    Ok(state.api_base.read().await.clone())
+}
+
 fn append_sync_params(
     url: &mut String,
     since: &Option<String>,
@@ -343,6 +426,119 @@ fn urlencoding(s: &str) -> String {
     s.replace('+', "%2B").replace(':', "%3A")
 }
 
+async fn env_config_status(env_file: &Path) -> Result<EnvConfigStatus, String> {
+    let env = read_env_file(env_file).unwrap_or_default();
+    let configured = env
+        .get("DATABASE_URL")
+        .is_some_and(|value| !value.trim().is_empty())
+        && env
+            .get("JWT_SECRET")
+            .is_some_and(|value| !value.trim().is_empty());
+    let api_addr = env
+        .get("API_ADDR")
+        .map(String::as_str)
+        .unwrap_or(DEFAULT_API_ADDR);
+    let api_base = api_base_from_addr(api_addr)?;
+
+    Ok(EnvConfigStatus {
+        configured,
+        env_path: env_file.display().to_string(),
+        api_base,
+    })
+}
+
+fn read_env_file(env_file: &Path) -> Result<HashMap<String, String>, String> {
+    if !env_file.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let mut env = HashMap::new();
+    for item in dotenvy::from_path_iter(env_file).map_err(|e| e.to_string())? {
+        let (key, value) = item.map_err(|e| e.to_string())?;
+        env.insert(key, value);
+    }
+    Ok(env)
+}
+
+fn normalize_api_addr(api_addr: Option<&str>) -> Result<String, String> {
+    let raw = api_addr
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_API_ADDR);
+    raw.parse::<SocketAddr>()
+        .map_err(|_| "API_ADDR must look like 127.0.0.1:45123".to_string())?;
+    Ok(raw.to_string())
+}
+
+fn api_base_from_addr(api_addr: &str) -> Result<String, String> {
+    let addr = normalize_api_addr(Some(api_addr))?;
+    let socket_addr = addr
+        .parse::<SocketAddr>()
+        .map_err(|_| "API_ADDR must look like 127.0.0.1:45123".to_string())?;
+    let host = match socket_addr.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST).to_string(),
+        IpAddr::V6(ip) if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST).to_string(),
+        IpAddr::V6(ip) => format!("[{ip}]"),
+        ip => ip.to_string(),
+    };
+    Ok(format!("http://{host}:{}", socket_addr.port()))
+}
+
+fn dotenv_quote(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n");
+    format!("\"{escaped}\"")
+}
+
+async fn start_embedded_api(
+    env_file: PathBuf,
+    api_base: Arc<RwLock<String>>,
+    api_started: Arc<AtomicBool>,
+) -> Result<(), String> {
+    let status = env_config_status(&env_file).await?;
+    if !status.configured {
+        return Err("DATABASE_URL and JWT_SECRET must be configured first".to_string());
+    }
+
+    {
+        let mut current_api_base = api_base.write().await;
+        *current_api_base = status.api_base;
+    }
+
+    if api_started
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Ok(());
+    }
+
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = gewt_api::run_with_env_file(Some(env_file)).await {
+            api_started.store(false, Ordering::SeqCst);
+            eprintln!("GEWT API failed to start: {error:#}");
+        }
+    });
+
+    Ok(())
+}
+
+async fn wait_for_api(api_base: &str) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    for _ in 0..80 {
+        if client.get(api_base).send().await.is_ok() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    Err(
+        "Saved settings, but GEWT API did not become ready. Check DATABASE_URL and try again."
+            .to_string(),
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -360,17 +556,35 @@ pub fn run() {
             let pool = tauri::async_runtime::block_on(async { cache::init_db(&data_dir).await })
                 .map_err(|e| Box::new(std::io::Error::other(e.to_string())))?;
 
-            app.manage(CacheState { pool });
+            let api_base = Arc::new(RwLock::new(API_BASE.to_string()));
+            let api_started = Arc::new(AtomicBool::new(false));
 
-            tauri::async_runtime::spawn(async move {
-                if let Err(error) = gewt_api::run_with_env_file(Some(env_file)).await {
-                    eprintln!("GEWT API failed to start: {error:#}");
-                }
+            app.manage(CacheState {
+                pool,
+                env_file: env_file.clone(),
+                api_base: Arc::clone(&api_base),
+                api_started: Arc::clone(&api_started),
             });
+
+            let should_start_api = tauri::async_runtime::block_on(async {
+                env_config_status(&env_file)
+                    .await
+                    .map(|status| status.configured)
+                    .unwrap_or(false)
+            });
+            if should_start_api {
+                tauri::async_runtime::block_on(async {
+                    start_embedded_api(env_file, api_base, api_started).await
+                })
+                .map_err(|e| Box::new(std::io::Error::other(e)))?;
+            }
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_env_config_status,
+            save_env_config,
+            get_api_base,
             sync_courses,
             sync_students,
             sync_receipts,
