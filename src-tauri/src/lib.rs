@@ -359,23 +359,30 @@ async fn get_env_config_status(
 ) -> Result<EnvConfigStatus, String> {
     let mut status = env_config_status(&state.env_file).await?;
     if status.configured {
-        if let Err(error) = start_embedded_api(
-            state.env_file.clone(),
-            Arc::clone(&state.api_base),
-            Arc::clone(&state.api_started),
-            Arc::clone(&state.api_error),
-        )
-        .await
-        {
-            status.api_error = Some(error);
-        }
         status.api_ready = is_api_ready(&status.api_base).await;
         if status.api_ready {
             let mut current_api_error = state.api_error.write().await;
             *current_api_error = None;
             status.api_error = None;
-        } else if status.api_error.is_none() {
-            status.api_error = state.api_error.read().await.clone();
+        } else {
+            let existing_error = state.api_error.read().await.clone();
+            if existing_error.is_none() && !state.api_started.load(Ordering::SeqCst) {
+                if let Err(error) = start_embedded_api(
+                    state.env_file.clone(),
+                    Arc::clone(&state.api_base),
+                    Arc::clone(&state.api_started),
+                    Arc::clone(&state.api_error),
+                )
+                .await
+                {
+                    status.api_error = Some(error);
+                }
+                status.api_ready = is_api_ready(&status.api_base).await;
+            }
+
+            if !status.api_ready && status.api_error.is_none() {
+                status.api_error = state.api_error.read().await.clone();
+            }
         }
     }
     Ok(status)
