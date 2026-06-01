@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { Settings } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,10 +32,12 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
   const [jwtSecret, setJwtSecret] = useState("");
   const [apiAddr, setApiAddr] = useState("127.0.0.1:45123");
   const [savingConfig, setSavingConfig] = useState(false);
+  const [changingConfig, setChangingConfig] = useState(false);
 
   const needsConfig =
     configStatus?.configured === false ||
     (configStatus?.configured === true && configStatus.api_ready === false);
+  const showConfigForm = needsConfig || changingConfig;
 
   useEffect(() => {
     getEnvConfigStatus()
@@ -85,6 +88,9 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
         api_addr: apiAddr,
       });
       setConfigStatus(status);
+      if (status.configured && status.api_ready) {
+        setChangingConfig(false);
+      }
       toast.success("Configuration saved");
     } catch (error) {
       toast.error(
@@ -111,7 +117,7 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {needsConfig ? (
+          {showConfigForm ? (
             <form className="flex flex-col gap-4" onSubmit={submitConfig}>
               <div className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
                 {configStatus?.configured
@@ -150,6 +156,17 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
               <Button type="submit" className="w-full" disabled={savingConfig}>
                 {savingConfig ? "Saving..." : "Save Configuration"}
               </Button>
+              {!needsConfig && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setChangingConfig(false)}
+                  disabled={savingConfig}
+                >
+                  Back to sign in
+                </Button>
+              )}
             </form>
           ) : (
             <form className="flex flex-col gap-4" onSubmit={submit}>
@@ -180,6 +197,16 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
                 disabled={busy || checkingConfig}
               >
                 {busy ? "Signing in..." : "Sign In"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => setChangingConfig(true)}
+                disabled={busy || checkingConfig}
+              >
+                <Settings className="size-4" />
+                Change vars
               </Button>
             </form>
           )}
