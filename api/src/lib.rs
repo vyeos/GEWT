@@ -1,8 +1,8 @@
+use anyhow::Context;
 use argon2::{
     password_hash::{PasswordHash, PasswordHasher, SaltString},
     Argon2, PasswordVerifier,
 };
-use anyhow::Context;
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -10,7 +10,7 @@ use axum::{
     routing::{get, patch, post},
     Json, Router,
 };
-use chrono::{Datelike, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -228,6 +228,75 @@ struct SettingsRequest {
     academic_year_start_month: i32,
 }
 
+#[derive(Deserialize)]
+struct SyncQuery {
+    since: Option<String>,
+    until: Option<String>,
+    cursor_updated_at: Option<String>,
+    cursor_id: Option<Uuid>,
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct SyncCourse {
+    id: Uuid,
+    branch_id: Uuid,
+    name: String,
+    duration: i32,
+    duration_type: String,
+    updated_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct SyncStudent {
+    id: Uuid,
+    form_no: String,
+    admission_date: NaiveDate,
+    branch_id: Uuid,
+    branch_name: String,
+    course_id: Uuid,
+    course_name: String,
+    course_duration: i32,
+    course_duration_type: String,
+    student_name: String,
+    category: String,
+    religion: String,
+    caste: String,
+    gender: String,
+    aadhar: String,
+    address: String,
+    student_phone: String,
+    parent_phone: String,
+    fee_year_1: f64,
+    fee_year_2: f64,
+    fee_year_3: f64,
+    fee_year_4: f64,
+    updated_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct SyncReceipt {
+    id: Uuid,
+    receipt_no: i64,
+    receipt_date: NaiveDate,
+    student_id: Uuid,
+    branch_id: Uuid,
+    fee_type: String,
+    amount_paid: f64,
+    payment_mode: String,
+    reference_no: Option<String>,
+    updated_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+struct SyncPage<T: Serialize> {
+    data: Vec<T>,
+    has_more: bool,
+    next_cursor_updated_at: Option<String>,
+    next_cursor_id: Option<Uuid>,
+    server_time: String,
+}
+
 pub async fn run() -> anyhow::Result<()> {
     dotenvy::from_path(format!("{}/.env", env!("CARGO_MANIFEST_DIR"))).ok();
     dotenvy::dotenv().ok();
@@ -242,7 +311,10 @@ pub async fn run_with_env_file(env_file: Option<PathBuf>) -> anyhow::Result<()> 
 }
 
 async fn run_server() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().with_env_filter("info").try_init().ok();
+    tracing_subscriber::fmt()
+        .with_env_filter("info")
+        .try_init()
+        .ok();
     let database_url = env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".to_string());
     let pool = PgPoolOptions::new()
@@ -266,6 +338,9 @@ async fn run_server() -> anyhow::Result<()> {
         .route("/receipts/:id", get(receipt))
         .route("/receipts/:id/print", get(receipt_print))
         .route("/reports/outstanding", get(outstanding))
+        .route("/sync/courses", get(sync_courses))
+        .route("/sync/students", get(sync_students))
+        .route("/sync/receipts", get(sync_receipts))
         .route("/users", get(users).post(create_user))
         .route("/users/:id", patch(update_user))
         .route("/academic-settings", patch(update_settings))
@@ -405,7 +480,7 @@ async fn update_course(
     require_admin(&state, &headers)?;
     let row = sqlx::query_as(
         "UPDATE courses
-         SET branch_id = $1, name = $2, duration = $3, duration_type = $4
+         SET branch_id = $1, name = $2, duration = $3, duration_type = $4, updated_at = now()
          WHERE id = $5 AND active = true
          RETURNING id, branch_id, name, duration, duration_type",
     )
@@ -680,6 +755,203 @@ async fn outstanding(
     Ok(Json(rows))
 }
 
+async fn sync_courses(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<SyncQuery>,
+) -> ApiResult<Json<SyncPage<SyncCourse>>> {
+    let auth = claims(&state, &headers)?;
+    let server_time = params
+        .until
+        .as_deref()
+        .map(parse_sync_timestamp)
+        .transpose()?
+        .unwrap_or_else(Utc::now);
+    let limit = params.limit.unwrap_or(500).clamp(1, 1000);
+    let branch_filter = auth.branch_id.filter(|_| auth.role != "admin");
+    let since_ts = parse_optional_sync_timestamp(params.since.as_deref(), "since")?;
+    let cursor = parse_sync_cursor(&params)?;
+
+    let rows: Vec<SyncCourse> = match (branch_filter, since_ts, cursor) {
+        (Some(bid), Some(since), Some((cursor_ts, cursor_id))) => sqlx::query_as(
+            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND branch_id = $1 AND updated_at > $2 AND updated_at <= $3 AND (updated_at, id) > ($4, $5) ORDER BY updated_at ASC, id ASC LIMIT $6"
+        )
+        .bind(bid).bind(since).bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (Some(bid), Some(since), None) => sqlx::query_as(
+            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND branch_id = $1 AND updated_at > $2 AND updated_at <= $3 ORDER BY updated_at ASC, id ASC LIMIT $4"
+        )
+        .bind(bid).bind(since).bind(server_time).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (Some(bid), None, Some((cursor_ts, cursor_id))) => sqlx::query_as(
+            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND branch_id = $1 AND updated_at <= $2 AND (updated_at, id) > ($3, $4) ORDER BY updated_at ASC, id ASC LIMIT $5"
+        )
+        .bind(bid).bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (Some(bid), None, None) => sqlx::query_as(
+            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND branch_id = $1 AND updated_at <= $2 ORDER BY updated_at ASC, id ASC LIMIT $3"
+        )
+        .bind(bid).bind(server_time).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (None, Some(since), Some((cursor_ts, cursor_id))) => sqlx::query_as(
+            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND updated_at > $1 AND updated_at <= $2 AND (updated_at, id) > ($3, $4) ORDER BY updated_at ASC, id ASC LIMIT $5"
+        )
+        .bind(since).bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (None, Some(since), None) => sqlx::query_as(
+            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND updated_at > $1 AND updated_at <= $2 ORDER BY updated_at ASC, id ASC LIMIT $3"
+        )
+        .bind(since).bind(server_time).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (None, None, Some((cursor_ts, cursor_id))) => sqlx::query_as(
+            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND updated_at <= $1 AND (updated_at, id) > ($2, $3) ORDER BY updated_at ASC, id ASC LIMIT $4"
+        )
+        .bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (None, None, None) => sqlx::query_as(
+            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND updated_at <= $1 ORDER BY updated_at ASC, id ASC LIMIT $2"
+        )
+        .bind(server_time).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+    };
+
+    Ok(Json(sync_page(rows, limit, server_time)))
+}
+
+async fn sync_students(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<SyncQuery>,
+) -> ApiResult<Json<SyncPage<SyncStudent>>> {
+    let auth = claims(&state, &headers)?;
+    let server_time = params
+        .until
+        .as_deref()
+        .map(parse_sync_timestamp)
+        .transpose()?
+        .unwrap_or_else(Utc::now);
+    let limit = params.limit.unwrap_or(500).clamp(1, 1000);
+    let branch_filter = auth.branch_id.filter(|_| auth.role != "admin");
+    let since_ts = parse_optional_sync_timestamp(params.since.as_deref(), "since")?;
+    let cursor = parse_sync_cursor(&params)?;
+
+    let rows: Vec<SyncStudent> = match (branch_filter, since_ts, cursor) {
+        (Some(bid), Some(since), Some((cursor_ts, cursor_id))) => sqlx::query_as(&format!(
+            "{} AND s.updated_at > $2 AND s.updated_at <= $3 AND (s.updated_at, s.id) > ($4, $5) ORDER BY s.updated_at ASC, s.id ASC LIMIT $6",
+            sync_student_select("WHERE s.branch_id = $1")
+        ))
+        .bind(bid).bind(since).bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (Some(bid), Some(since), None) => sqlx::query_as(&format!(
+            "{} AND s.updated_at > $2 AND s.updated_at <= $3 ORDER BY s.updated_at ASC, s.id ASC LIMIT $4",
+            sync_student_select("WHERE s.branch_id = $1")
+        ))
+        .bind(bid).bind(since).bind(server_time).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (Some(bid), None, Some((cursor_ts, cursor_id))) => sqlx::query_as(&format!(
+            "{} AND s.updated_at <= $2 AND (s.updated_at, s.id) > ($3, $4) ORDER BY s.updated_at ASC, s.id ASC LIMIT $5",
+            sync_student_select("WHERE s.branch_id = $1")
+        ))
+        .bind(bid).bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (Some(bid), None, None) => sqlx::query_as(&format!(
+            "{} AND s.updated_at <= $2 ORDER BY s.updated_at ASC, s.id ASC LIMIT $3",
+            sync_student_select("WHERE s.branch_id = $1")
+        ))
+        .bind(bid).bind(server_time).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (None, Some(since), Some((cursor_ts, cursor_id))) => sqlx::query_as(&format!(
+            "{} ORDER BY s.updated_at ASC, s.id ASC LIMIT $5",
+            sync_student_select("WHERE s.updated_at > $1 AND s.updated_at <= $2 AND (s.updated_at, s.id) > ($3, $4)")
+        ))
+        .bind(since).bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (None, Some(since), None) => sqlx::query_as(&format!(
+            "{} ORDER BY s.updated_at ASC, s.id ASC LIMIT $3",
+            sync_student_select("WHERE s.updated_at > $1 AND s.updated_at <= $2")
+        ))
+        .bind(since).bind(server_time).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (None, None, Some((cursor_ts, cursor_id))) => sqlx::query_as(&format!(
+            "{} ORDER BY s.updated_at ASC, s.id ASC LIMIT $4",
+            sync_student_select("WHERE s.updated_at <= $1 AND (s.updated_at, s.id) > ($2, $3)")
+        ))
+        .bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (None, None, None) => sqlx::query_as(&format!(
+            "{} ORDER BY s.updated_at ASC, s.id ASC LIMIT $2",
+            sync_student_select("WHERE s.updated_at <= $1")
+        ))
+        .bind(server_time).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+    };
+
+    Ok(Json(sync_page(rows, limit, server_time)))
+}
+
+async fn sync_receipts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<SyncQuery>,
+) -> ApiResult<Json<SyncPage<SyncReceipt>>> {
+    let auth = claims(&state, &headers)?;
+    let server_time = params
+        .until
+        .as_deref()
+        .map(parse_sync_timestamp)
+        .transpose()?
+        .unwrap_or_else(Utc::now);
+    let limit = params.limit.unwrap_or(500).clamp(1, 1000);
+    let branch_filter = auth.branch_id.filter(|_| auth.role != "admin");
+    let since_ts = parse_optional_sync_timestamp(params.since.as_deref(), "since")?;
+    let cursor = parse_sync_cursor(&params)?;
+
+    let rows: Vec<SyncReceipt> = match (branch_filter, since_ts, cursor) {
+        (Some(bid), Some(since), Some((cursor_ts, cursor_id))) => sqlx::query_as(
+            "SELECT id, receipt_no, receipt_date, student_id, branch_id, COALESCE(fee_type, 'Tuition') AS fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no, updated_at FROM receipts WHERE branch_id = $1 AND updated_at > $2 AND updated_at <= $3 AND (updated_at, id) > ($4, $5) ORDER BY updated_at ASC, id ASC LIMIT $6"
+        )
+        .bind(bid).bind(since).bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (Some(bid), Some(since), None) => sqlx::query_as(
+            "SELECT id, receipt_no, receipt_date, student_id, branch_id, COALESCE(fee_type, 'Tuition') AS fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no, updated_at FROM receipts WHERE branch_id = $1 AND updated_at > $2 AND updated_at <= $3 ORDER BY updated_at ASC, id ASC LIMIT $4"
+        )
+        .bind(bid).bind(since).bind(server_time).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (Some(bid), None, Some((cursor_ts, cursor_id))) => sqlx::query_as(
+            "SELECT id, receipt_no, receipt_date, student_id, branch_id, COALESCE(fee_type, 'Tuition') AS fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no, updated_at FROM receipts WHERE branch_id = $1 AND updated_at <= $2 AND (updated_at, id) > ($3, $4) ORDER BY updated_at ASC, id ASC LIMIT $5"
+        )
+        .bind(bid).bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (Some(bid), None, None) => sqlx::query_as(
+            "SELECT id, receipt_no, receipt_date, student_id, branch_id, COALESCE(fee_type, 'Tuition') AS fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no, updated_at FROM receipts WHERE branch_id = $1 AND updated_at <= $2 ORDER BY updated_at ASC, id ASC LIMIT $3"
+        )
+        .bind(bid).bind(server_time).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (None, Some(since), Some((cursor_ts, cursor_id))) => sqlx::query_as(
+            "SELECT id, receipt_no, receipt_date, student_id, branch_id, COALESCE(fee_type, 'Tuition') AS fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no, updated_at FROM receipts WHERE updated_at > $1 AND updated_at <= $2 AND (updated_at, id) > ($3, $4) ORDER BY updated_at ASC, id ASC LIMIT $5"
+        )
+        .bind(since).bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (None, Some(since), None) => sqlx::query_as(
+            "SELECT id, receipt_no, receipt_date, student_id, branch_id, COALESCE(fee_type, 'Tuition') AS fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no, updated_at FROM receipts WHERE updated_at > $1 AND updated_at <= $2 ORDER BY updated_at ASC, id ASC LIMIT $3"
+        )
+        .bind(since).bind(server_time).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (None, None, Some((cursor_ts, cursor_id))) => sqlx::query_as(
+            "SELECT id, receipt_no, receipt_date, student_id, branch_id, COALESCE(fee_type, 'Tuition') AS fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no, updated_at FROM receipts WHERE updated_at <= $1 AND (updated_at, id) > ($2, $3) ORDER BY updated_at ASC, id ASC LIMIT $4"
+        )
+        .bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+        (None, None, None) => sqlx::query_as(
+            "SELECT id, receipt_no, receipt_date, student_id, branch_id, COALESCE(fee_type, 'Tuition') AS fee_type, amount_paid::float8 AS amount_paid, payment_mode, reference_no, updated_at FROM receipts WHERE updated_at <= $1 ORDER BY updated_at ASC, id ASC LIMIT $2"
+        )
+        .bind(server_time).bind(limit + 1)
+        .fetch_all(&state.pool).await?,
+    };
+
+    Ok(Json(sync_page(rows, limit, server_time)))
+}
+
 async fn users(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Vec<User>>> {
     require_admin(&state, &headers)?;
     Ok(Json(
@@ -687,6 +959,99 @@ async fn users(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<J
             .fetch_all(&state.pool)
             .await?,
     ))
+}
+
+trait SyncCursorRow {
+    fn sync_updated_at(&self) -> DateTime<Utc>;
+    fn sync_id(&self) -> Uuid;
+}
+
+impl SyncCursorRow for SyncCourse {
+    fn sync_updated_at(&self) -> DateTime<Utc> {
+        self.updated_at
+    }
+
+    fn sync_id(&self) -> Uuid {
+        self.id
+    }
+}
+
+impl SyncCursorRow for SyncStudent {
+    fn sync_updated_at(&self) -> DateTime<Utc> {
+        self.updated_at
+    }
+
+    fn sync_id(&self) -> Uuid {
+        self.id
+    }
+}
+
+impl SyncCursorRow for SyncReceipt {
+    fn sync_updated_at(&self) -> DateTime<Utc> {
+        self.updated_at
+    }
+
+    fn sync_id(&self) -> Uuid {
+        self.id
+    }
+}
+
+fn sync_page<T>(mut rows: Vec<T>, limit: i64, server_time: DateTime<Utc>) -> SyncPage<T>
+where
+    T: Serialize + SyncCursorRow,
+{
+    let has_more = rows.len() as i64 > limit;
+    if has_more {
+        rows.truncate(limit as usize);
+    }
+    let next_cursor_updated_at = rows
+        .last()
+        .filter(|_| has_more)
+        .map(|row| row.sync_updated_at().to_rfc3339());
+    let next_cursor_id = rows.last().filter(|_| has_more).map(SyncCursorRow::sync_id);
+
+    SyncPage {
+        data: rows,
+        has_more,
+        next_cursor_updated_at,
+        next_cursor_id,
+        server_time: server_time.to_rfc3339(),
+    }
+}
+
+fn parse_sync_cursor(params: &SyncQuery) -> ApiResult<Option<(DateTime<Utc>, Uuid)>> {
+    match (
+        params
+            .cursor_updated_at
+            .as_deref()
+            .filter(|s| !s.is_empty()),
+        params.cursor_id,
+    ) {
+        (Some(updated_at), Some(id)) => Ok(Some((parse_sync_timestamp(updated_at)?, id))),
+        (None, None) => Ok(None),
+        _ => Err(ApiError::BadRequest(
+            "Both cursor_updated_at and cursor_id are required".to_string(),
+        )),
+    }
+}
+
+fn parse_optional_sync_timestamp(
+    value: Option<&str>,
+    name: &str,
+) -> ApiResult<Option<DateTime<Utc>>> {
+    value
+        .filter(|s| !s.is_empty())
+        .map(|timestamp| {
+            parse_sync_timestamp(timestamp)
+                .map_err(|_| ApiError::BadRequest(format!("Invalid '{name}' timestamp")))
+        })
+        .transpose()
+}
+
+fn parse_sync_timestamp(value: &str) -> ApiResult<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|_| ApiError::BadRequest("Invalid sync timestamp".to_string()))
 }
 
 async fn create_user(
@@ -853,11 +1218,9 @@ async fn next_form_no_value(tx: &mut Transaction<'_, Postgres>) -> ApiResult<Str
 }
 
 async fn next_receipt_no_value(tx: &mut Transaction<'_, Postgres>) -> ApiResult<i64> {
-    let next: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(receipt_no), 0) + 1 FROM receipts",
-    )
-    .fetch_one(&mut **tx)
-    .await?;
+    let next: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(receipt_no), 0) + 1 FROM receipts")
+        .fetch_one(&mut **tx)
+        .await?;
     Ok(next)
 }
 
@@ -871,11 +1234,9 @@ async fn peek_form_no(pool: &PgPool) -> ApiResult<String> {
 }
 
 async fn peek_receipt_no(pool: &PgPool) -> ApiResult<String> {
-    let next: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(receipt_no), 0) + 1 FROM receipts",
-    )
-    .fetch_one(pool)
-    .await?;
+    let next: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(receipt_no), 0) + 1 FROM receipts")
+        .fetch_one(pool)
+        .await?;
     Ok(next.to_string())
 }
 
@@ -935,6 +1296,20 @@ fn student_select(where_clause: &str) -> String {
         JOIN courses c ON c.id=s.course_id
         {where_clause}
         ORDER BY s.form_no"
+    )
+}
+
+fn sync_student_select(where_clause: &str) -> String {
+    format!(
+        "SELECT s.id, s.form_no, s.admission_date, s.branch_id, b.name AS branch_name, s.course_id, c.name AS course_name,
+        c.duration AS course_duration, c.duration_type AS course_duration_type, s.student_name, s.category, s.religion, s.caste, s.gender,
+        s.aadhar, s.address, s.student_phone, s.parent_phone,
+        s.fee_year_1::float8 AS fee_year_1, s.fee_year_2::float8 AS fee_year_2, s.fee_year_3::float8 AS fee_year_3, s.fee_year_4::float8 AS fee_year_4,
+        s.updated_at
+        FROM students s
+        JOIN branches b ON b.id=s.branch_id
+        JOIN courses c ON c.id=s.course_id
+        {where_clause}"
     )
 }
 

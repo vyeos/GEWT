@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
+import { cacheStudent } from "@/lib/cache";
 import { getCourseDuration } from "@/lib/course-duration";
 import { today } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -99,7 +100,7 @@ export function Admission({
         .map((part) => part.trim())
         .filter(Boolean)
         .join(" ");
-      await api<Student>("/students", token, {
+      const savedStudent = await api<Student>("/students", token, {
         method: "POST",
         body: JSON.stringify({
           ...studentForm,
@@ -110,6 +111,7 @@ export function Admission({
           fee_year_4: yearly_fee,
         }),
       });
+      cacheStudent(savedStudent).catch(() => {});
       toast.success("Admission saved");
       setForm(initialForm());
       setGeneratedFormNo("");

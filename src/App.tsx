@@ -9,6 +9,7 @@ import { Outstanding } from "@/features/outstanding/Outstanding";
 import { Receipt } from "@/features/receipt/Receipt";
 import { Utility } from "@/features/utility/Utility";
 import { api } from "@/lib/api";
+import { syncAll } from "@/lib/cache";
 import type { Branch, Course, Me, Screen } from "@/types";
 
 type Theme = "light" | "dark";
@@ -46,6 +47,10 @@ function App() {
       setMe(profile);
       setBranches(branchList);
       setCourses(courseList);
+
+      syncAll(session, profile).catch(() =>
+        toast.warning("Sync incomplete — showing cached data"),
+      );
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Unable to load GEWT data",

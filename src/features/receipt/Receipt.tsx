@@ -29,6 +29,14 @@ import {
 import { paymentModes } from "@/data/seeds";
 import { api } from "@/lib/api";
 import {
+  cacheReceipt,
+  getCachedReceipts,
+  getCachedStudents,
+  syncReceipts,
+  syncScope,
+  syncStudents,
+} from "@/lib/cache";
+import {
   formatCourseYear,
   getCourseBillingPeriods,
   getCurrentCourseYear,
@@ -84,6 +92,8 @@ export function Receipt({
   const [studentReceipts, setStudentReceipts] = useState<StudentReceipt[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const requiresRef = mode !== "Cash";
+  const branchScopeId = me.role === "admin" ? undefined : (me.branch_id ?? undefined);
+  const cacheScope = syncScope(me);
   const allowedBranches =
     me.role === "admin"
       ? branches
@@ -138,17 +148,35 @@ export function Receipt({
 
   useEffect(() => {
     async function loadStudents() {
+      let showedCachedData = false;
       try {
-        setStudents(await api<Student[]>("/students", token));
+        const cachedStudents = await getCachedStudents(branchScopeId);
+        if (cachedStudents.length > 0) {
+          setStudents(cachedStudents);
+          showedCachedData = true;
+        }
+      } catch {
+        // The cache is only available in Tauri. Browser dev falls back below.
+      }
+
+      try {
+        await syncStudents(token, cacheScope);
+        setStudents(await getCachedStudents(branchScopeId));
       } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Unable to load students",
-        );
+        try {
+          setStudents(await api<Student[]>("/students", token));
+        } catch {
+          if (!showedCachedData) {
+            toast.error(
+              error instanceof Error ? error.message : "Unable to load students",
+            );
+          }
+        }
       }
     }
 
     void loadStudents();
-  }, [token, refreshKey]);
+  }, [branchScopeId, cacheScope, token, refreshKey]);
 
   useEffect(() => {
     void loadNextReceiptNo();
@@ -166,18 +194,34 @@ export function Receipt({
       return;
     }
     async function loadStudentReceipts() {
+      let showedCachedData = false;
       try {
-        const data = await api<StudentReceipt[]>(
-          `/receipts?student_id=${studentId}`,
-          token,
-        );
-        setStudentReceipts(data);
+        const cachedReceipts = await getCachedReceipts(studentId, branchScopeId);
+        setStudentReceipts(cachedReceipts as StudentReceipt[]);
+        showedCachedData = cachedReceipts.length > 0;
       } catch {
-        setStudentReceipts([]);
+        // The cache is only available in Tauri. Browser dev falls back below.
+      }
+
+      try {
+        await syncReceipts(token, cacheScope);
+        setStudentReceipts(
+          (await getCachedReceipts(studentId, branchScopeId)) as StudentReceipt[],
+        );
+      } catch {
+        try {
+          const data = await api<StudentReceipt[]>(
+            `/receipts?student_id=${encodeURIComponent(studentId)}`,
+            token,
+          );
+          setStudentReceipts(data);
+        } catch {
+          if (!showedCachedData) setStudentReceipts([]);
+        }
       }
     }
     void loadStudentReceipts();
-  }, [studentId, token, refreshKey]);
+  }, [branchScopeId, cacheScope, studentId, token, refreshKey]);
 
   const feeStatusRows = useMemo(() => {
     if (!selectedStudent) return [];
@@ -303,6 +347,7 @@ export function Receipt({
           reference_no: reference,
         }),
       });
+      cacheReceipt(savedReceipt).catch(() => {});
       setStudentReceipts((current) =>
         current.map((receipt) =>
           receipt.optimistic_id === optimisticId ? savedReceipt : receipt,
