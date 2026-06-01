@@ -16,7 +16,7 @@ jobs:
       matrix:
         include:
           - platform: windows
-            runner: [self-hosted, Windows]
+            runner: windows-latest
           - platform: macos
             runner: [self-hosted, macOS]
 
@@ -28,18 +28,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust
+      - name: Install Rust (Windows)
+        if: matrix.platform == 'windows'
         run: |
           rustup update stable
           rustup default stable
+          rustup component add rustc
           rustc --version
           cargo --version
 
+      - name: Install Rust (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup component add --toolchain stable-aarch64-apple-darwin rustc
+          rustc --version
+          cargo --version
+
+      - name: Rust cache
+        if: matrix.platform == 'windows'
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
       - name: Install Bun
+        if: matrix.platform == 'windows'
         uses: oven-sh/setup-bun@v2
 
       - name: Install frontend dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Prepare Finder for DMG creation
         if: matrix.platform == 'macos'
