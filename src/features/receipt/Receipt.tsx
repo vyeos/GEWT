@@ -1,5 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronsUpDown, ReceiptText, RotateCcw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Check,
+  ChevronsUpDown,
+  Printer,
+  ReceiptText,
+  RotateCcw,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -44,6 +50,7 @@ import {
 import { money, today } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Branch, Course, Me, PaymentMode, Student } from "@/types";
+import { ReceiptPrint, type PrintableReceipt } from "./ReceiptPrint";
 
 type ReceiptRow = {
   receipt_no: number;
@@ -92,6 +99,10 @@ export function Receipt({
   const [yearFilter, setYearFilter] = useState("all");
   const [studentReceipts, setStudentReceipts] = useState<StudentReceipt[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [printReceipt, setPrintReceipt] = useState<PrintableReceipt | null>(
+    null,
+  );
+  const printAfterRenderRef = useRef(false);
   const requiresRef = mode !== "Cash";
   const branchScopeId =
     me.role === "admin" ? undefined : (me.branch_id ?? undefined);
@@ -108,6 +119,9 @@ export function Receipt({
     }))
     .filter((group) => group.branchCourses.length > 0);
   const selectedStudent = students.find((student) => student.id === studentId);
+  const selectedBranch = branches.find(
+    (branch) => branch.id === selectedStudent?.branch_id,
+  );
   const availableYears = useMemo(() => {
     const years = new Set<number>();
     for (const student of students) {
@@ -322,6 +336,35 @@ export function Receipt({
     }
   }, [amount, amountMax]);
 
+  // Wait for the letterhead image to load, then open the print dialog. The
+  // browser/webview reprints whatever is in #receipt-print at print time.
+  useEffect(() => {
+    if (!printReceipt || !printAfterRenderRef.current) return;
+    printAfterRenderRef.current = false;
+    const img = document.querySelector<HTMLImageElement>("#receipt-print img");
+    if (img && !img.complete) {
+      const done = () => {
+        img.removeEventListener("load", done);
+        img.removeEventListener("error", done);
+        window.print();
+      };
+      img.addEventListener("load", done);
+      img.addEventListener("error", done);
+      return;
+    }
+    // Defer one frame so the template is painted before printing.
+    requestAnimationFrame(() => window.print());
+  }, [printReceipt]);
+
+  function handlePrint(receipt: PrintableReceipt) {
+    if (!selectedStudent) {
+      toast.error("Select a student first");
+      return;
+    }
+    printAfterRenderRef.current = true;
+    setPrintReceipt(receipt);
+  }
+
   function updateAmount(value: string) {
     const nextAmount = Number(value);
     if (!Number.isFinite(nextAmount)) {
@@ -384,6 +427,7 @@ export function Receipt({
         ),
       );
       toast.success(`Saved Receipt #${savedReceipt.receipt_no}`);
+      handlePrint(savedReceipt);
       setReceiptNo("");
       setGeneratedReceiptNo("");
       void loadNextReceiptNo();
@@ -767,14 +811,15 @@ export function Receipt({
                 <Table className="table-fixed">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-[15%]">Receipt No</TableHead>
-                      <TableHead className="w-[18%]">Date</TableHead>
-                      <TableHead className="w-[15%]">Fee Type</TableHead>
-                      <TableHead className="w-[14%]">Mode</TableHead>
-                      <TableHead className="w-[18%] text-right">
+                      <TableHead className="w-[14%]">Receipt No</TableHead>
+                      <TableHead className="w-[16%]">Date</TableHead>
+                      <TableHead className="w-[13%]">Fee Type</TableHead>
+                      <TableHead className="w-[12%]">Mode</TableHead>
+                      <TableHead className="w-[16%] text-right">
                         Amount
                       </TableHead>
-                      <TableHead className="w-[20%]">Remarks</TableHead>
+                      <TableHead className="w-[19%]">Remarks</TableHead>
+                      <TableHead className="w-[10%] text-right">Print</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -788,6 +833,28 @@ export function Receipt({
                           {money(r.amount_paid)}
                         </TableCell>
                         <TableCell>{r.reference_no || "—"}</TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            title="Print receipt"
+                            aria-label={`Print receipt ${r.receipt_no}`}
+                            onClick={() =>
+                              handlePrint({
+                                receipt_no: r.receipt_no,
+                                receipt_date: r.receipt_date,
+                                fee_type: r.fee_type,
+                                payment_mode: r.payment_mode,
+                                amount_paid: r.amount_paid,
+                                reference_no: r.reference_no,
+                              })
+                            }
+                          >
+                            <Printer className="size-4" />
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -843,6 +910,13 @@ export function Receipt({
           </Card>
         </div>
       )}
+
+      <ReceiptPrint
+        student={selectedStudent}
+        branch={selectedBranch}
+        receipt={printReceipt}
+        academicYearStartMonth={me.academic_year_start_month}
+      />
     </div>
   );
 }

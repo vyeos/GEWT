@@ -509,9 +509,9 @@ export function Utility({
                       </SelectGroup>
                     </SelectContent>
                   </Select>
-                  <Button onClick={openAddUser}>
+                  <Button onClick={openAddUser} size="sm">
                     <UserPlus className="size-4" />
-                    Add user
+                    Add User
                   </Button>
                 </div>
               </div>
