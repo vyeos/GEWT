@@ -89,39 +89,55 @@ export function Receipt({
   const [courseOpen, setCourseOpen] = useState(false);
   const [studentOpen, setStudentOpen] = useState(false);
   const [studentSearch, setStudentSearch] = useState("");
+  const [yearFilter, setYearFilter] = useState("all");
   const [studentReceipts, setStudentReceipts] = useState<StudentReceipt[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const requiresRef = mode !== "Cash";
-  const branchScopeId = me.role === "admin" ? undefined : (me.branch_id ?? undefined);
+  const branchScopeId =
+    me.role === "admin" ? undefined : (me.branch_id ?? undefined);
   const cacheScope = syncScope(me);
   const allowedBranches =
     me.role === "admin"
       ? branches
       : branches.filter((branch) => branch.id === me.branch_id);
   const selectedCourse = courses.find((course) => course.id === courseId);
+  const branchCourseGroups = allowedBranches
+    .map((branch) => ({
+      branch,
+      branchCourses: courses.filter((course) => course.branch_id === branch.id),
+    }))
+    .filter((group) => group.branchCourses.length > 0);
   const selectedStudent = students.find((student) => student.id === studentId);
-  const selectedStudentYear = useMemo(
-    () =>
-      selectedStudent
-        ? formatCourseYear(
-            getCurrentCourseYear(
-              selectedStudent,
-              me.academic_year_start_month,
-            ),
-          )
-        : "",
-    [selectedStudent, me.academic_year_start_month],
-  );
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    for (const student of students) {
+      if (courseId && student.course_id !== courseId) continue;
+      years.add(getCurrentCourseYear(student, me.academic_year_start_month));
+    }
+    return [...years].sort((a, b) => a - b);
+  }, [students, courseId, me.academic_year_start_month]);
   const visibleStudents = useMemo(() => {
     const query = studentSearch.trim().toLowerCase();
     return students.filter((student) => {
       if (courseId && student.course_id !== courseId) return false;
+      if (
+        yearFilter !== "all" &&
+        getCurrentCourseYear(student, me.academic_year_start_month) !==
+          Number(yearFilter)
+      )
+        return false;
       if (!query) return true;
       return `${student.form_no} ${student.student_name} ${student.course_name}`
         .toLowerCase()
         .includes(query);
     });
-  }, [courseId, studentSearch, students]);
+  }, [
+    courseId,
+    studentSearch,
+    students,
+    yearFilter,
+    me.academic_year_start_month,
+  ]);
 
   async function loadNextReceiptNo() {
     try {
@@ -168,7 +184,9 @@ export function Receipt({
         } catch {
           if (!showedCachedData) {
             toast.error(
-              error instanceof Error ? error.message : "Unable to load students",
+              error instanceof Error
+                ? error.message
+                : "Unable to load students",
             );
           }
         }
@@ -189,6 +207,12 @@ export function Receipt({
   }, [courseId, studentId, students]);
 
   useEffect(() => {
+    if (yearFilter !== "all" && !availableYears.includes(Number(yearFilter))) {
+      setYearFilter("all");
+    }
+  }, [availableYears, yearFilter]);
+
+  useEffect(() => {
     if (!studentId) {
       setStudentReceipts([]);
       return;
@@ -196,7 +220,10 @@ export function Receipt({
     async function loadStudentReceipts() {
       let showedCachedData = false;
       try {
-        const cachedReceipts = await getCachedReceipts(studentId, branchScopeId);
+        const cachedReceipts = await getCachedReceipts(
+          studentId,
+          branchScopeId,
+        );
         setStudentReceipts(cachedReceipts as StudentReceipt[]);
         showedCachedData = cachedReceipts.length > 0;
       } catch {
@@ -206,7 +233,10 @@ export function Receipt({
       try {
         await syncReceipts(token, cacheScope);
         setStudentReceipts(
-          (await getCachedReceipts(studentId, branchScopeId)) as StudentReceipt[],
+          (await getCachedReceipts(
+            studentId,
+            branchScopeId,
+          )) as StudentReceipt[],
         );
       } catch {
         try {
@@ -465,13 +495,13 @@ export function Receipt({
                         All courses
                       </button>
                     </div>
-                    <div className="flex divide-x">
-                      {allowedBranches.map((branch) => {
-                        const branchCourses = courses.filter(
-                          (course) => course.branch_id === branch.id,
-                        );
-                        if (branchCourses.length === 0) return null;
-                        return (
+                    {branchCourseGroups.length === 0 ? (
+                      <div className="px-2 py-6 text-center text-sm text-muted-foreground">
+                        No results found
+                      </div>
+                    ) : (
+                      <div className="flex divide-x">
+                        {branchCourseGroups.map(({ branch, branchCourses }) => (
                           <div key={branch.id} className="min-w-40 flex-1 p-1">
                             <div className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground">
                               {branch.name}
@@ -501,14 +531,14 @@ export function Receipt({
                               </button>
                             ))}
                           </div>
-                        );
-                      })}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                   </PopoverContent>
                 </Popover>
               </div>
               <div className="flex flex-col gap-2">
-                <Label>Student name</Label>
+                <Label>Student Name</Label>
                 <Popover open={studentOpen} onOpenChange={setStudentOpen}>
                   <PopoverTrigger asChild>
                     <Button
@@ -593,7 +623,53 @@ export function Receipt({
               </div>
               <div className="flex flex-col gap-2">
                 <Label>Current Year</Label>
-                <Input disabled value={selectedStudentYear} />
+                <Select
+                  value={
+                    selectedStudent
+                      ? String(
+                          getCurrentCourseYear(
+                            selectedStudent,
+                            me.academic_year_start_month,
+                          ),
+                        )
+                      : yearFilter
+                  }
+                  onValueChange={(value) => {
+                    setYearFilter(value);
+                    if (
+                      selectedStudent &&
+                      value !== "all" &&
+                      String(
+                        getCurrentCourseYear(
+                          selectedStudent,
+                          me.academic_year_start_month,
+                        ),
+                      ) !== value
+                    ) {
+                      setStudentId("");
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="All years" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="all">All years</SelectItem>
+                      {availableYears.length === 0 ? (
+                        <div className="px-2 py-6 text-center text-sm text-muted-foreground">
+                          No results found
+                        </div>
+                      ) : (
+                        availableYears.map((year) => (
+                          <SelectItem key={year} value={String(year)}>
+                            {formatCourseYear(year)}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
@@ -609,11 +685,17 @@ export function Receipt({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      {feeTypes.map((item) => (
-                        <SelectItem key={item} value={item}>
-                          {item}
-                        </SelectItem>
-                      ))}
+                      {(feeTypes as readonly FeeType[]).length === 0 ? (
+                        <div className="px-2 py-6 text-center text-sm text-muted-foreground">
+                          No results found
+                        </div>
+                      ) : (
+                        feeTypes.map((item) => (
+                          <SelectItem key={item} value={item}>
+                            {item}
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectGroup>
                   </SelectContent>
                 </Select>
@@ -689,7 +771,9 @@ export function Receipt({
                       <TableHead className="w-[18%]">Date</TableHead>
                       <TableHead className="w-[15%]">Fee Type</TableHead>
                       <TableHead className="w-[14%]">Mode</TableHead>
-                      <TableHead className="w-[18%] text-right">Amount</TableHead>
+                      <TableHead className="w-[18%] text-right">
+                        Amount
+                      </TableHead>
                       <TableHead className="w-[20%]">Remarks</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -725,8 +809,12 @@ export function Receipt({
                       <TableHead className="w-[22%]">Fee Type</TableHead>
                       <TableHead className="w-[16%]">Year</TableHead>
                       <TableHead className="w-[16%]">Sem</TableHead>
-                      <TableHead className="w-[23%] text-right">Total</TableHead>
-                      <TableHead className="w-[23%] text-right">Pending</TableHead>
+                      <TableHead className="w-[23%] text-right">
+                        Total
+                      </TableHead>
+                      <TableHead className="w-[23%] text-right">
+                        Pending
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>

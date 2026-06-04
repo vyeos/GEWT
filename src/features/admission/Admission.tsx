@@ -72,6 +72,12 @@ export function Admission({
   const durationValue = selectedCourse
     ? getCourseDuration(selectedCourse).label
     : "";
+  const branchCourseGroups = allowedBranches
+    .map((branch) => ({
+      branch,
+      branchCourses: courses.filter((c) => c.branch_id === branch.id),
+    }))
+    .filter((group) => group.branchCourses.length > 0);
 
   async function loadNextFormNo() {
     try {
@@ -202,13 +208,13 @@ export function Admission({
                   className="w-auto min-w-[var(--radix-popover-trigger-width)] p-0"
                   align="start"
                 >
-                  <div className="flex divide-x">
-                    {allowedBranches.map((branch) => {
-                      const branchCourses = courses.filter(
-                        (c) => c.branch_id === branch.id,
-                      );
-                      if (branchCourses.length === 0) return null;
-                      return (
+                  {branchCourseGroups.length === 0 ? (
+                    <div className="px-2 py-6 text-center text-sm text-muted-foreground">
+                      No results found
+                    </div>
+                  ) : (
+                    <div className="flex divide-x">
+                      {branchCourseGroups.map(({ branch, branchCourses }) => (
                         <div key={branch.id} className="min-w-40 flex-1 p-1">
                           <div className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground">
                             {branch.name}
@@ -242,9 +248,9 @@ export function Admission({
                             </button>
                           ))}
                         </div>
-                      );
-                    })}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </PopoverContent>
               </Popover>
             </div>
@@ -311,7 +317,7 @@ export function Admission({
                 value={form.category}
                 onValueChange={(category) => setForm({ ...form, category })}
               >
-                <SelectTrigger>
+                <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
