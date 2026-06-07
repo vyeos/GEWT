@@ -66,10 +66,26 @@ export type Student = {
   other_fee_year_4: number;
 };
 
+export type OutstandingFeeBreakdown = {
+  due: number;
+  paid: number;
+  pending: number;
+};
+
+export type OutstandingYearBreakdown = {
+  year: number;
+  tuition: OutstandingFeeBreakdown;
+  other: OutstandingFeeBreakdown;
+  total_due: number;
+  total_paid: number;
+  pending: number;
+};
+
 export type OutstandingRow = Student & {
   total_due: number;
   total_paid: number;
   pending: number;
   current_period: string;
   last_receipt_no: string | null;
+  year_breakdown: OutstandingYearBreakdown[];
 };

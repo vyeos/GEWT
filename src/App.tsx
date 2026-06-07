@@ -211,8 +211,10 @@ function App() {
       {screen === "outstanding" && (
         <Outstanding
           token={token}
+          me={me}
           refreshKey={screenRefreshKey}
           branches={branches}
+          courses={courses}
         />
       )}
       {screen === "utility" && (

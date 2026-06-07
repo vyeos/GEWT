@@ -147,6 +147,30 @@ struct OutstandingRow {
     pending: f64,
     current_period: String,
     last_receipt_no: Option<String>,
+    year_breakdown: Vec<OutstandingYearBreakdown>,
+}
+
+#[derive(Debug, Serialize)]
+struct OutstandingYearBreakdown {
+    year: i32,
+    tuition: OutstandingFeeBreakdown,
+    other: OutstandingFeeBreakdown,
+    total_due: f64,
+    total_paid: f64,
+    pending: f64,
+}
+
+#[derive(Debug, Serialize, Clone, Copy)]
+struct OutstandingFeeBreakdown {
+    due: f64,
+    paid: f64,
+    pending: f64,
+}
+
+#[derive(Debug, FromRow)]
+struct PaidFeeType {
+    fee_type: String,
+    total_paid: f64,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -861,34 +885,46 @@ async fn outstanding(
     headers: HeaderMap,
 ) -> ApiResult<Json<Vec<OutstandingRow>>> {
     let auth = claims(&state, &headers)?;
-    let settings_month: i32 =
-        sqlx::query_scalar("SELECT academic_year_start_month FROM academic_settings")
-            .fetch_one(&state.pool)
-            .await?;
     let all_students =
         load_students(&state.pool, auth.branch_id.filter(|_| auth.role != "admin")).await?;
     let mut rows = Vec::new();
     for student in all_students {
-        let paid: f64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(amount_paid),0)::float8 FROM receipts WHERE student_id=$1 AND fee_type='Tuition'",
+        let paid_rows: Vec<PaidFeeType> = sqlx::query_as(
+            "SELECT COALESCE(fee_type, 'Tuition') AS fee_type, COALESCE(SUM(amount_paid),0)::float8 AS total_paid
+             FROM receipts
+             WHERE student_id=$1
+             GROUP BY COALESCE(fee_type, 'Tuition')",
         )
         .bind(student.id)
-        .fetch_one(&state.pool)
+        .fetch_all(&state.pool)
         .await?;
-        let (due, label) = due_for_student(&student, settings_month);
-        let pending = (due - paid).max(0.0);
+
+        let mut paid_by_type = HashMap::new();
+        for row in paid_rows {
+            paid_by_type.insert(row.fee_type, row.total_paid);
+        }
+
+        let year_breakdown = outstanding_year_breakdown(
+            &student,
+            paid_by_type.get("Tuition").copied().unwrap_or(0.0),
+            paid_by_type.get("Other").copied().unwrap_or(0.0),
+        );
+        let due = year_breakdown.iter().map(|row| row.total_due).sum();
+        let paid = year_breakdown.iter().map(|row| row.total_paid).sum();
+        let pending = year_breakdown.iter().map(|row| row.pending).sum();
         if pending > 0.0 {
             let last_receipt_no: Option<i64> = sqlx::query_scalar("SELECT receipt_no FROM receipts WHERE student_id=$1 ORDER BY receipt_no DESC LIMIT 1")
                 .bind(student.id)
                 .fetch_optional(&state.pool)
                 .await?;
             rows.push(OutstandingRow {
+                current_period: current_period_label(&student),
                 student,
                 total_due: due,
                 total_paid: paid,
                 pending,
-                current_period: label,
                 last_receipt_no: last_receipt_no.map(|n| n.to_string()),
+                year_breakdown,
             });
         }
     }
@@ -1552,23 +1588,111 @@ fn total_course_years(duration: i32, duration_type: &str) -> i32 {
     years.clamp(1, 4)
 }
 
-fn due_for_student(student: &Student, _academic_start_month: i32) -> (f64, String) {
+fn current_course_year(student: &Student) -> i32 {
+    student.current_course_year.clamp(
+        1,
+        total_course_years(student.course_duration, &student.course_duration_type),
+    )
+}
+
+fn current_period_label(student: &Student) -> String {
+    let current_year = current_course_year(student);
+    if student.course_duration_type == "semester" {
+        let semester = (current_year * 2)
+            .min(student.course_duration)
+            .max(1);
+        return format!("Semester {semester}");
+    }
+    format!("Year {current_year}")
+}
+
+fn fee_breakdown(due: f64, paid: f64) -> OutstandingFeeBreakdown {
+    OutstandingFeeBreakdown {
+        due,
+        paid,
+        pending: (due - paid).max(0.0),
+    }
+}
+
+fn allocate_fee_by_year(
+    yearly_fees: [f64; 4],
+    course_duration: i32,
+    duration_type: &str,
+    current_year: i32,
+    mut paid: f64,
+) -> Vec<OutstandingFeeBreakdown> {
+    let total_years = total_course_years(course_duration, duration_type) as usize;
+    let total_semesters = if duration_type == "semester" {
+        course_duration as usize
+    } else {
+        (course_duration as usize) * 2
+    };
+    let due_semesters = ((current_year as usize) * 2)
+        .min(total_semesters)
+        .max(1);
+    let mut due_by_year = [0.0; 4];
+    let mut paid_by_year = [0.0; 4];
+
+    for semester_index in 0..due_semesters {
+        let year_index = semester_index / 2;
+        let period_due = yearly_fees[year_index] / 2.0;
+        let period_paid = paid.min(period_due);
+        paid -= period_paid;
+        due_by_year[year_index] += period_due;
+        paid_by_year[year_index] += period_paid;
+    }
+
+    (0..total_years)
+        .map(|index| fee_breakdown(due_by_year[index], paid_by_year[index]))
+        .collect()
+}
+
+fn outstanding_year_breakdown(
+    student: &Student,
+    tuition_paid: f64,
+    other_paid: f64,
+) -> Vec<OutstandingYearBreakdown> {
     let current_year = student
         .current_course_year
-        .clamp(1, total_course_years(student.course_duration, &student.course_duration_type))
-        as usize;
-    let fees = [
-        student.tuition_fee_year_1,
-        student.tuition_fee_year_2,
-        student.tuition_fee_year_3,
-        student.tuition_fee_year_4,
-    ];
-    let total_semesters = if student.course_duration_type == "semester" {
-        student.course_duration as usize
-    } else {
-        (student.course_duration as usize) * 2
-    };
-    let semester = (current_year * 2).min(total_semesters).max(1);
-    let due = (0..semester).map(|i| fees[i / 2] / 2.0).sum();
-    (due, format!("Semester {semester}"))
+        .clamp(1, total_course_years(student.course_duration, &student.course_duration_type));
+    let tuition = allocate_fee_by_year(
+        [
+            student.tuition_fee_year_1,
+            student.tuition_fee_year_2,
+            student.tuition_fee_year_3,
+            student.tuition_fee_year_4,
+        ],
+        student.course_duration,
+        &student.course_duration_type,
+        current_year,
+        tuition_paid,
+    );
+    let other = allocate_fee_by_year(
+        [
+            student.other_fee_year_1,
+            student.other_fee_year_2,
+            student.other_fee_year_3,
+            student.other_fee_year_4,
+        ],
+        student.course_duration,
+        &student.course_duration_type,
+        current_year,
+        other_paid,
+    );
+    let total_years = total_course_years(student.course_duration, &student.course_duration_type);
+
+    (0..total_years as usize)
+        .map(|index| {
+            let tuition = tuition[index];
+            let other = other[index];
+            OutstandingYearBreakdown {
+                year: index as i32 + 1,
+                tuition,
+                other,
+                total_due: tuition.due + other.due,
+                total_paid: tuition.paid + other.paid,
+                pending: tuition.pending + other.pending,
+            }
+        })
+        .collect()
 }
