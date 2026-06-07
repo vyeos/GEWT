@@ -55,11 +55,20 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             fee_year_2 REAL NOT NULL,
             fee_year_3 REAL NOT NULL,
             fee_year_4 REAL NOT NULL,
+            tuition_fee_year_1 REAL NOT NULL DEFAULT 0,
+            tuition_fee_year_2 REAL NOT NULL DEFAULT 0,
+            tuition_fee_year_3 REAL NOT NULL DEFAULT 0,
+            tuition_fee_year_4 REAL NOT NULL DEFAULT 0,
+            other_fee_year_1 REAL NOT NULL DEFAULT 0,
+            other_fee_year_2 REAL NOT NULL DEFAULT 0,
+            other_fee_year_3 REAL NOT NULL DEFAULT 0,
+            other_fee_year_4 REAL NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL
         )",
     )
     .execute(pool)
     .await?;
+    ensure_student_fee_split_columns(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS receipts (
@@ -117,6 +126,45 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+async fn ensure_student_fee_split_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    for column in [
+        "tuition_fee_year_1",
+        "tuition_fee_year_2",
+        "tuition_fee_year_3",
+        "tuition_fee_year_4",
+        "other_fee_year_1",
+        "other_fee_year_2",
+        "other_fee_year_3",
+        "other_fee_year_4",
+    ] {
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('students') WHERE name = $1",
+        )
+        .bind(column)
+        .fetch_one(pool)
+        .await?;
+        if exists == 0 {
+            sqlx::query(&format!(
+                "ALTER TABLE students ADD COLUMN {column} REAL NOT NULL DEFAULT 0"
+            ))
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    sqlx::query(
+        "UPDATE students SET
+            tuition_fee_year_1 = CASE WHEN tuition_fee_year_1 = 0 AND other_fee_year_1 = 0 THEN fee_year_1 ELSE tuition_fee_year_1 END,
+            tuition_fee_year_2 = CASE WHEN tuition_fee_year_2 = 0 AND other_fee_year_2 = 0 THEN fee_year_2 ELSE tuition_fee_year_2 END,
+            tuition_fee_year_3 = CASE WHEN tuition_fee_year_3 = 0 AND other_fee_year_3 = 0 THEN fee_year_3 ELSE tuition_fee_year_3 END,
+            tuition_fee_year_4 = CASE WHEN tuition_fee_year_4 = 0 AND other_fee_year_4 = 0 THEN fee_year_4 ELSE tuition_fee_year_4 END",
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CachedCourse {
     pub id: String,
@@ -151,6 +199,14 @@ pub struct CachedStudent {
     pub fee_year_2: f64,
     pub fee_year_3: f64,
     pub fee_year_4: f64,
+    pub tuition_fee_year_1: f64,
+    pub tuition_fee_year_2: f64,
+    pub tuition_fee_year_3: f64,
+    pub tuition_fee_year_4: f64,
+    pub other_fee_year_1: f64,
+    pub other_fee_year_2: f64,
+    pub other_fee_year_3: f64,
+    pub other_fee_year_4: f64,
     pub updated_at: String,
 }
 
@@ -191,14 +247,16 @@ pub async fn upsert_students(
 ) -> Result<(), sqlx::Error> {
     for s in students {
         sqlx::query(
-            "INSERT OR REPLACE INTO students (id, form_no, admission_date, branch_id, branch_name, course_id, course_name, course_duration, course_duration_type, student_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone, fee_year_1, fee_year_2, fee_year_3, fee_year_4, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)",
+            "INSERT OR REPLACE INTO students (id, form_no, admission_date, branch_id, branch_name, course_id, course_name, course_duration, course_duration_type, student_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone, fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)",
         )
         .bind(&s.id).bind(&s.form_no).bind(&s.admission_date).bind(&s.branch_id).bind(&s.branch_name)
         .bind(&s.course_id).bind(&s.course_name).bind(s.course_duration).bind(&s.course_duration_type)
         .bind(&s.student_name).bind(&s.category).bind(&s.religion).bind(&s.caste).bind(&s.gender)
         .bind(&s.aadhar).bind(&s.address).bind(&s.student_phone).bind(&s.parent_phone)
         .bind(s.fee_year_1).bind(s.fee_year_2).bind(s.fee_year_3).bind(s.fee_year_4)
+        .bind(s.tuition_fee_year_1).bind(s.tuition_fee_year_2).bind(s.tuition_fee_year_3).bind(s.tuition_fee_year_4)
+        .bind(s.other_fee_year_1).bind(s.other_fee_year_2).bind(s.other_fee_year_3).bind(s.other_fee_year_4)
         .bind(&s.updated_at)
         .execute(pool)
         .await?;
@@ -257,7 +315,9 @@ pub async fn get_students(
              COALESCE(c.duration_type, s.course_duration_type) AS course_duration_type,
              s.student_name, s.category, s.religion, s.caste, s.gender, s.aadhar, s.address,
              s.student_phone, s.parent_phone, s.fee_year_1, s.fee_year_2, s.fee_year_3,
-             s.fee_year_4, s.updated_at
+             s.fee_year_4, s.tuition_fee_year_1, s.tuition_fee_year_2, s.tuition_fee_year_3,
+             s.tuition_fee_year_4, s.other_fee_year_1, s.other_fee_year_2, s.other_fee_year_3,
+             s.other_fee_year_4, s.updated_at
              FROM students s
              LEFT JOIN courses c ON c.id = s.course_id
              WHERE s.branch_id = $1
@@ -274,7 +334,9 @@ pub async fn get_students(
              COALESCE(c.duration_type, s.course_duration_type) AS course_duration_type,
              s.student_name, s.category, s.religion, s.caste, s.gender, s.aadhar, s.address,
              s.student_phone, s.parent_phone, s.fee_year_1, s.fee_year_2, s.fee_year_3,
-             s.fee_year_4, s.updated_at
+             s.fee_year_4, s.tuition_fee_year_1, s.tuition_fee_year_2, s.tuition_fee_year_3,
+             s.tuition_fee_year_4, s.other_fee_year_1, s.other_fee_year_2, s.other_fee_year_3,
+             s.other_fee_year_4, s.updated_at
              FROM students s
              LEFT JOIN courses c ON c.id = s.course_id
              ORDER BY s.form_no",
@@ -362,6 +424,14 @@ fn row_to_student(row: &sqlx::sqlite::SqliteRow) -> CachedStudent {
         fee_year_2: row.get("fee_year_2"),
         fee_year_3: row.get("fee_year_3"),
         fee_year_4: row.get("fee_year_4"),
+        tuition_fee_year_1: row.get("tuition_fee_year_1"),
+        tuition_fee_year_2: row.get("tuition_fee_year_2"),
+        tuition_fee_year_3: row.get("tuition_fee_year_3"),
+        tuition_fee_year_4: row.get("tuition_fee_year_4"),
+        other_fee_year_1: row.get("other_fee_year_1"),
+        other_fee_year_2: row.get("other_fee_year_2"),
+        other_fee_year_3: row.get("other_fee_year_3"),
+        other_fee_year_4: row.get("other_fee_year_4"),
         updated_at: row.get("updated_at"),
     }
 }

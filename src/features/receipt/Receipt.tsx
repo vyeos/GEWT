@@ -269,11 +269,25 @@ export function Receipt({
 
   const feeStatusRows = useMemo(() => {
     if (!selectedStudent) return [];
-    const feeFields = [
-      selectedStudent.fee_year_1,
-      selectedStudent.fee_year_2,
-      selectedStudent.fee_year_3,
-      selectedStudent.fee_year_4,
+    const feeGroups = [
+      {
+        feeType: "Tuition",
+        fees: [
+          selectedStudent.tuition_fee_year_1,
+          selectedStudent.tuition_fee_year_2,
+          selectedStudent.tuition_fee_year_3,
+          selectedStudent.tuition_fee_year_4,
+        ],
+      },
+      {
+        feeType: "Other",
+        fees: [
+          selectedStudent.other_fee_year_1,
+          selectedStudent.other_fee_year_2,
+          selectedStudent.other_fee_year_3,
+          selectedStudent.other_fee_year_4,
+        ],
+      },
     ];
     const currentYear = getCurrentCourseYear(
       selectedStudent,
@@ -292,42 +306,34 @@ export function Receipt({
       total: number;
       pending: number;
     }[] = [];
-    let tuitionPaid = paidByType.get("Tuition") ?? 0;
-    for (const period of getCourseBillingPeriods(selectedStudent)) {
-      if (period.year > currentYear) break;
-      const yearlyFee = feeFields[period.year - 1] ?? 0;
-      const periodFee = period.semester ? yearlyFee / 2 : yearlyFee;
-      const deduct = Math.min(tuitionPaid, periodFee);
-      tuitionPaid -= deduct;
-      rows.push({
-        feeType: "Tuition",
-        year: period.year,
-        sem: period.semester ? period.label : "—",
-        total: periodFee,
-        pending: periodFee - deduct,
-      });
-    }
-    const otherPaid = paidByType.get("Other") ?? 0;
-    const otherTotal = studentReceipts
-      .filter((r) => r.fee_type === "Other")
-      .reduce((s, r) => s + r.amount_paid, 0);
-    if (otherTotal > 0) {
-      rows.push({
-        feeType: "Other",
-        year: 0,
-        sem: "—",
-        total: otherTotal,
-        pending: otherTotal - otherPaid,
-      });
+    const periods = getCourseBillingPeriods(selectedStudent);
+    for (const group of feeGroups) {
+      let paid = paidByType.get(group.feeType) ?? 0;
+      for (const period of periods) {
+        if (period.year > currentYear) break;
+        const yearlyFee = group.fees[period.year - 1] ?? 0;
+        const periodFee = period.semester ? yearlyFee / 2 : yearlyFee;
+        const deduct = Math.min(paid, periodFee);
+        paid -= deduct;
+        rows.push({
+          feeType: group.feeType,
+          year: period.year,
+          sem: period.semester ? period.label : "—",
+          total: periodFee,
+          pending: periodFee - deduct,
+        });
+      }
     }
     return rows;
   }, [selectedStudent, studentReceipts, me.academic_year_start_month]);
   const amountMax = useMemo(
     () =>
       selectedStudent
-        ? feeStatusRows.reduce((sum, row) => sum + row.pending, 0)
+        ? feeStatusRows
+            .filter((row) => row.feeType === feeType)
+            .reduce((sum, row) => sum + row.pending, 0)
         : undefined,
-    [feeStatusRows, selectedStudent],
+    [feeStatusRows, feeType, selectedStudent],
   );
 
   useEffect(() => {

@@ -54,6 +54,14 @@ export type Student = {
   fee_year_2: number;
   fee_year_3: number;
   fee_year_4: number;
+  tuition_fee_year_1: number;
+  tuition_fee_year_2: number;
+  tuition_fee_year_3: number;
+  tuition_fee_year_4: number;
+  other_fee_year_1: number;
+  other_fee_year_2: number;
+  other_fee_year_3: number;
+  other_fee_year_4: number;
 };
 
 export type OutstandingRow = Student & {

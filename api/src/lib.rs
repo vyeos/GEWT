@@ -127,6 +127,14 @@ struct Student {
     fee_year_2: f64,
     fee_year_3: f64,
     fee_year_4: f64,
+    tuition_fee_year_1: f64,
+    tuition_fee_year_2: f64,
+    tuition_fee_year_3: f64,
+    tuition_fee_year_4: f64,
+    other_fee_year_1: f64,
+    other_fee_year_2: f64,
+    other_fee_year_3: f64,
+    other_fee_year_4: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -193,6 +201,20 @@ struct StudentRequest {
     fee_year_2: f64,
     fee_year_3: f64,
     fee_year_4: f64,
+    tuition_fee_year_1: Option<f64>,
+    tuition_fee_year_2: Option<f64>,
+    tuition_fee_year_3: Option<f64>,
+    tuition_fee_year_4: Option<f64>,
+    other_fee_year_1: Option<f64>,
+    other_fee_year_2: Option<f64>,
+    other_fee_year_3: Option<f64>,
+    other_fee_year_4: Option<f64>,
+}
+
+struct StudentFees {
+    yearly: [f64; 4],
+    tuition: [f64; 4],
+    other: [f64; 4],
 }
 
 #[derive(Deserialize)]
@@ -271,6 +293,14 @@ struct SyncStudent {
     fee_year_2: f64,
     fee_year_3: f64,
     fee_year_4: f64,
+    tuition_fee_year_1: f64,
+    tuition_fee_year_2: f64,
+    tuition_fee_year_3: f64,
+    tuition_fee_year_4: f64,
+    other_fee_year_1: f64,
+    other_fee_year_2: f64,
+    other_fee_year_3: f64,
+    other_fee_year_4: f64,
     updated_at: chrono::DateTime<Utc>,
 }
 
@@ -522,11 +552,12 @@ async fn create_student(
 ) -> ApiResult<Json<Student>> {
     let auth = claims(&state, &headers)?;
     ensure_branch(&auth, req.branch_id)?;
+    let fees = normalize_student_fees(&req)?;
     let mut tx = state.pool.begin().await?;
     let form_no = resolve_student_form_no(&mut tx, req.form_no.as_deref()).await?;
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO students (form_no, admission_date, branch_id, course_id, student_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone, fee_year_1, fee_year_2, fee_year_3, fee_year_4, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        "INSERT INTO students (form_no, admission_date, branch_id, course_id, student_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone, fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
          RETURNING id",
     )
     .bind(form_no)
@@ -542,10 +573,18 @@ async fn create_student(
     .bind(req.address)
     .bind(req.student_phone)
     .bind(req.parent_phone)
-    .bind(req.fee_year_1)
-    .bind(req.fee_year_2)
-    .bind(req.fee_year_3)
-    .bind(req.fee_year_4)
+    .bind(fees.yearly[0])
+    .bind(fees.yearly[1])
+    .bind(fees.yearly[2])
+    .bind(fees.yearly[3])
+    .bind(fees.tuition[0])
+    .bind(fees.tuition[1])
+    .bind(fees.tuition[2])
+    .bind(fees.tuition[3])
+    .bind(fees.other[0])
+    .bind(fees.other[1])
+    .bind(fees.other[2])
+    .bind(fees.other[3])
     .bind(auth.sub)
     .fetch_one(&mut *tx)
     .await?;
@@ -563,8 +602,9 @@ async fn update_student(
     ensure_branch(&auth, req.branch_id)?;
     let existing = load_student(&state.pool, id).await?;
     ensure_branch(&auth, existing.branch_id)?;
+    let fees = normalize_student_fees(&req)?;
     sqlx::query(
-        "UPDATE students SET admission_date=$1, branch_id=$2, course_id=$3, student_name=$4, category=$5, religion=$6, caste=$7, gender=$8, aadhar=$9, address=$10, student_phone=$11, parent_phone=$12, fee_year_1=$13, fee_year_2=$14, fee_year_3=$15, fee_year_4=$16, updated_at=now() WHERE id=$17",
+        "UPDATE students SET admission_date=$1, branch_id=$2, course_id=$3, student_name=$4, category=$5, religion=$6, caste=$7, gender=$8, aadhar=$9, address=$10, student_phone=$11, parent_phone=$12, fee_year_1=$13, fee_year_2=$14, fee_year_3=$15, fee_year_4=$16, tuition_fee_year_1=$17, tuition_fee_year_2=$18, tuition_fee_year_3=$19, tuition_fee_year_4=$20, other_fee_year_1=$21, other_fee_year_2=$22, other_fee_year_3=$23, other_fee_year_4=$24, updated_at=now() WHERE id=$25",
     )
     .bind(req.admission_date)
     .bind(req.branch_id)
@@ -578,10 +618,18 @@ async fn update_student(
     .bind(req.address)
     .bind(req.student_phone)
     .bind(req.parent_phone)
-    .bind(req.fee_year_1)
-    .bind(req.fee_year_2)
-    .bind(req.fee_year_3)
-    .bind(req.fee_year_4)
+    .bind(fees.yearly[0])
+    .bind(fees.yearly[1])
+    .bind(fees.yearly[2])
+    .bind(fees.yearly[3])
+    .bind(fees.tuition[0])
+    .bind(fees.tuition[1])
+    .bind(fees.tuition[2])
+    .bind(fees.tuition[3])
+    .bind(fees.other[0])
+    .bind(fees.other[1])
+    .bind(fees.other[2])
+    .bind(fees.other[3])
     .bind(id)
     .execute(&state.pool)
     .await?;
@@ -1200,6 +1248,47 @@ fn normalize_user_request(req: &UserRequest) -> ApiResult<(String, String, Strin
     ))
 }
 
+fn normalize_student_fees(req: &StudentRequest) -> ApiResult<StudentFees> {
+    let yearly = [
+        req.fee_year_1,
+        req.fee_year_2,
+        req.fee_year_3,
+        req.fee_year_4,
+    ];
+    let tuition = [
+        req.tuition_fee_year_1.unwrap_or(req.fee_year_1),
+        req.tuition_fee_year_2.unwrap_or(req.fee_year_2),
+        req.tuition_fee_year_3.unwrap_or(req.fee_year_3),
+        req.tuition_fee_year_4.unwrap_or(req.fee_year_4),
+    ];
+    let other = [
+        req.other_fee_year_1.unwrap_or(0.0),
+        req.other_fee_year_2.unwrap_or(0.0),
+        req.other_fee_year_3.unwrap_or(0.0),
+        req.other_fee_year_4.unwrap_or(0.0),
+    ];
+
+    for index in 0..yearly.len() {
+        if yearly[index] < 0.0 || tuition[index] < 0.0 || other[index] < 0.0 {
+            return Err(ApiError::BadRequest(
+                "Fee amounts cannot be negative".to_string(),
+            ));
+        }
+        if (tuition[index] + other[index] - yearly[index]).abs() > 0.01 {
+            return Err(ApiError::BadRequest(format!(
+                "Tuition fee and other fee must add up to year {} fee",
+                index + 1
+            )));
+        }
+    }
+
+    Ok(StudentFees {
+        yearly,
+        tuition,
+        other,
+    })
+}
+
 fn hash_password(password: &str) -> ApiResult<String> {
     let salt = SaltString::generate(&mut rand_core::OsRng);
     Argon2::default()
@@ -1247,10 +1336,11 @@ async fn resolve_student_form_no(
     let Some(form_no) = form_no.map(str::trim).filter(|value| !value.is_empty()) else {
         return next_form_no_value(tx).await;
     };
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM students WHERE form_no = $1)")
-        .bind(form_no)
-        .fetch_one(&mut **tx)
-        .await?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM students WHERE form_no = $1)")
+            .bind(form_no)
+            .fetch_one(&mut **tx)
+            .await?;
     if !exists {
         return Ok(form_no.to_string());
     }
@@ -1275,10 +1365,11 @@ async fn resolve_receipt_no(
     let parsed = receipt_no
         .parse::<i64>()
         .map_err(|_| ApiError::BadRequest("Receipt number must be numeric".to_string()))?;
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM receipts WHERE receipt_no = $1)")
-        .bind(parsed)
-        .fetch_one(&mut **tx)
-        .await?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM receipts WHERE receipt_no = $1)")
+            .bind(parsed)
+            .fetch_one(&mut **tx)
+            .await?;
     if !exists {
         return Ok(parsed);
     }
@@ -1319,7 +1410,9 @@ fn student_select(where_clause: &str) -> String {
         "SELECT s.id, s.form_no, s.admission_date, s.branch_id, b.name AS branch_name, s.course_id, c.name AS course_name,
         c.duration AS course_duration, c.duration_type AS course_duration_type, s.student_name, s.category, s.religion, s.caste, s.gender,
         s.aadhar, s.address, s.student_phone, s.parent_phone,
-        s.fee_year_1::float8 AS fee_year_1, s.fee_year_2::float8 AS fee_year_2, s.fee_year_3::float8 AS fee_year_3, s.fee_year_4::float8 AS fee_year_4
+        s.fee_year_1::float8 AS fee_year_1, s.fee_year_2::float8 AS fee_year_2, s.fee_year_3::float8 AS fee_year_3, s.fee_year_4::float8 AS fee_year_4,
+        s.tuition_fee_year_1::float8 AS tuition_fee_year_1, s.tuition_fee_year_2::float8 AS tuition_fee_year_2, s.tuition_fee_year_3::float8 AS tuition_fee_year_3, s.tuition_fee_year_4::float8 AS tuition_fee_year_4,
+        s.other_fee_year_1::float8 AS other_fee_year_1, s.other_fee_year_2::float8 AS other_fee_year_2, s.other_fee_year_3::float8 AS other_fee_year_3, s.other_fee_year_4::float8 AS other_fee_year_4
         FROM students s
         JOIN branches b ON b.id=s.branch_id
         JOIN courses c ON c.id=s.course_id
@@ -1334,6 +1427,8 @@ fn sync_student_select(where_clause: &str) -> String {
         c.duration AS course_duration, c.duration_type AS course_duration_type, s.student_name, s.category, s.religion, s.caste, s.gender,
         s.aadhar, s.address, s.student_phone, s.parent_phone,
         s.fee_year_1::float8 AS fee_year_1, s.fee_year_2::float8 AS fee_year_2, s.fee_year_3::float8 AS fee_year_3, s.fee_year_4::float8 AS fee_year_4,
+        s.tuition_fee_year_1::float8 AS tuition_fee_year_1, s.tuition_fee_year_2::float8 AS tuition_fee_year_2, s.tuition_fee_year_3::float8 AS tuition_fee_year_3, s.tuition_fee_year_4::float8 AS tuition_fee_year_4,
+        s.other_fee_year_1::float8 AS other_fee_year_1, s.other_fee_year_2::float8 AS other_fee_year_2, s.other_fee_year_3::float8 AS other_fee_year_3, s.other_fee_year_4::float8 AS other_fee_year_4,
         s.updated_at
         FROM students s
         JOIN branches b ON b.id=s.branch_id
@@ -1356,10 +1451,10 @@ fn due_for_student(student: &Student, academic_start_month: i32) -> (f64, String
         - academic_year_for(student.admission_date, academic_start_month);
     let current_year = (years_elapsed + 1).clamp(1, 4) as usize;
     let fees = [
-        student.fee_year_1,
-        student.fee_year_2,
-        student.fee_year_3,
-        student.fee_year_4,
+        student.tuition_fee_year_1,
+        student.tuition_fee_year_2,
+        student.tuition_fee_year_3,
+        student.tuition_fee_year_4,
     ];
     let total_semesters = if student.course_duration_type == "semester" {
         student.course_duration as usize

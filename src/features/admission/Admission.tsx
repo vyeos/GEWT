@@ -22,7 +22,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { cacheStudent } from "@/lib/cache";
 import { getCourseDuration } from "@/lib/course-duration";
-import { today } from "@/lib/format";
+import { money, today } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Branch, Course, Me, Student } from "@/types";
 
@@ -62,6 +62,8 @@ export function Admission({
     student_phone: "",
     parent_phone: "",
     yearly_fee: 0,
+    tuition_fee: 0,
+    other_fee: 0,
   });
   const [form, setForm] = useState(initialForm);
   const [generatedFormNo, setGeneratedFormNo] = useState("");
@@ -78,6 +80,8 @@ export function Admission({
       branchCourses: courses.filter((c) => c.branch_id === branch.id),
     }))
     .filter((group) => group.branchCourses.length > 0);
+  const tuitionFeeMax = Math.max(0, form.yearly_fee - form.other_fee);
+  const otherFeeMax = Math.max(0, form.yearly_fee - form.tuition_fee);
 
   async function loadNextFormNo() {
     try {
@@ -100,8 +104,19 @@ export function Admission({
   async function submit(event: FormEvent) {
     event.preventDefault();
     try {
-      const { yearly_fee, surname, student_name, father_name, ...studentForm } =
-        form;
+      const {
+        yearly_fee,
+        tuition_fee,
+        other_fee,
+        surname,
+        student_name,
+        father_name,
+        ...studentForm
+      } = form;
+      if (Math.abs(tuition_fee + other_fee - yearly_fee) > 0.01) {
+        toast.error("Tuition fee and other fee must add up to yearly fee");
+        return;
+      }
       const fullName = [surname, student_name, father_name]
         .map((part) => part.trim())
         .filter(Boolean)
@@ -115,6 +130,14 @@ export function Admission({
           fee_year_2: yearly_fee,
           fee_year_3: yearly_fee,
           fee_year_4: yearly_fee,
+          tuition_fee_year_1: tuition_fee,
+          tuition_fee_year_2: tuition_fee,
+          tuition_fee_year_3: tuition_fee,
+          tuition_fee_year_4: tuition_fee,
+          other_fee_year_1: other_fee,
+          other_fee_year_2: other_fee,
+          other_fee_year_3: other_fee,
+          other_fee_year_4: other_fee,
         }),
       });
       cacheStudent(savedStudent).catch(() => {});
@@ -126,6 +149,38 @@ export function Admission({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Admission failed");
     }
+  }
+
+  function updateYearlyFee(value: string) {
+    const parsed = Number(value);
+    const yearly_fee = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    setForm((current) => ({
+      ...current,
+      yearly_fee,
+      tuition_fee: Math.min(current.tuition_fee, yearly_fee),
+      other_fee: Math.min(
+        current.other_fee,
+        Math.max(0, yearly_fee - Math.min(current.tuition_fee, yearly_fee)),
+      ),
+    }));
+  }
+
+  function updateSplitFee(field: "tuition_fee" | "other_fee", value: string) {
+    const parsed = Number(value);
+    const amount = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    setForm((current) => ({
+      ...current,
+      [field]: Math.min(
+        amount,
+        Math.max(
+          0,
+          current.yearly_fee -
+            (field === "tuition_fee"
+              ? current.other_fee
+              : current.tuition_fee),
+        ),
+      ),
+    }));
   }
 
   return (
@@ -266,14 +321,48 @@ export function Admission({
               <Input
                 type="number"
                 min="0"
+                step="0.01"
                 value={form.yearly_fee}
+                onChange={(e) => updateYearlyFee(e.currentTarget.value)}
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Tuition fee</Label>
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                max={tuitionFeeMax}
+                value={form.tuition_fee}
+                disabled={tuitionFeeMax === 0}
                 onChange={(e) =>
-                  setForm({
-                    ...form,
-                    yearly_fee: Number(e.currentTarget.value),
-                  })
+                  updateSplitFee("tuition_fee", e.currentTarget.value)
                 }
               />
+              {form.yearly_fee > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Max {money(tuitionFeeMax)}
+                </p>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Other fee</Label>
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                max={otherFeeMax}
+                value={form.other_fee}
+                disabled={otherFeeMax === 0}
+                onChange={(e) =>
+                  updateSplitFee("other_fee", e.currentTarget.value)
+                }
+              />
+              {form.yearly_fee > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Max {money(otherFeeMax)}
+                </p>
+              )}
             </div>
           </div>
 
