@@ -119,6 +119,9 @@ export function Receipt({
     }))
     .filter((group) => group.branchCourses.length > 0);
   const selectedStudent = students.find((student) => student.id === studentId);
+  const selectedStudentCurrentYear = selectedStudent
+    ? getCurrentCourseYear(selectedStudent, me.academic_year_start_month)
+    : null;
   const selectedBranch = branches.find(
     (branch) => branch.id === selectedStudent?.branch_id,
   );
@@ -493,7 +496,7 @@ export function Receipt({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(10rem,14rem)]">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(10rem,13rem)_minmax(10rem,13rem)]">
               <div className="flex flex-col gap-2">
                 <Label>Course</Label>
                 <Popover open={courseOpen} onOpenChange={setCourseOpen}>
@@ -679,33 +682,10 @@ export function Receipt({
                 </Popover>
               </div>
               <div className="flex flex-col gap-2">
-                <Label>Current Year</Label>
+                <Label>Find students from</Label>
                 <Select
-                  value={
-                    selectedStudent
-                      ? String(
-                          getCurrentCourseYear(
-                            selectedStudent,
-                            me.academic_year_start_month,
-                          ),
-                        )
-                      : yearFilter
-                  }
-                  onValueChange={(value) => {
-                    setYearFilter(value);
-                    if (
-                      selectedStudent &&
-                      value !== "all" &&
-                      String(
-                        getCurrentCourseYear(
-                          selectedStudent,
-                          me.academic_year_start_month,
-                        ),
-                      ) !== value
-                    ) {
-                      setStudentId("");
-                    }
-                  }}
+                  value={yearFilter}
+                  onValueChange={setYearFilter}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="All years" />
@@ -727,6 +707,18 @@ export function Receipt({
                     </SelectGroup>
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Current course year</Label>
+                <div className="flex h-9 items-center rounded-md border bg-muted/40 px-3 text-sm">
+                  {selectedStudentCurrentYear ? (
+                    formatCourseYear(selectedStudentCurrentYear)
+                  ) : (
+                    <span className="text-muted-foreground">
+                      Select student
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
