@@ -43,6 +43,7 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             course_duration INTEGER NOT NULL,
             course_duration_type TEXT NOT NULL,
             current_course_year INTEGER NOT NULL DEFAULT 1,
+            current_course_period INTEGER NOT NULL DEFAULT 1,
             student_name TEXT NOT NULL,
             category TEXT NOT NULL,
             religion TEXT NOT NULL,
@@ -168,14 +169,32 @@ async fn ensure_student_fee_split_columns(pool: &SqlitePool) -> Result<(), sqlx:
 }
 
 async fn ensure_student_promotion_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    let exists: i64 = sqlx::query_scalar(
+    let year_exists: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM pragma_table_info('students') WHERE name = 'current_course_year'",
     )
     .fetch_one(pool)
     .await?;
-    if exists == 0 {
+    if year_exists == 0 {
         sqlx::query(
             "ALTER TABLE students ADD COLUMN current_course_year INTEGER NOT NULL DEFAULT 1",
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    let period_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('students') WHERE name = 'current_course_period'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if period_exists == 0 {
+        sqlx::query(
+            "ALTER TABLE students ADD COLUMN current_course_period INTEGER NOT NULL DEFAULT 1",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "UPDATE students SET current_course_period = ((current_course_year - 1) * 2) + 1",
         )
         .execute(pool)
         .await?;
@@ -206,6 +225,7 @@ pub struct CachedStudent {
     pub course_duration: i32,
     pub course_duration_type: String,
     pub current_course_year: i32,
+    pub current_course_period: i32,
     pub student_name: String,
     pub category: String,
     pub religion: String,
@@ -267,12 +287,12 @@ pub async fn upsert_students(
 ) -> Result<(), sqlx::Error> {
     for s in students {
         sqlx::query(
-            "INSERT OR REPLACE INTO students (id, form_no, admission_date, branch_id, branch_name, course_id, course_name, course_duration, course_duration_type, current_course_year, student_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone, fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)",
+            "INSERT OR REPLACE INTO students (id, form_no, admission_date, branch_id, branch_name, course_id, course_name, course_duration, course_duration_type, current_course_year, current_course_period, student_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone, fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)",
         )
         .bind(&s.id).bind(&s.form_no).bind(&s.admission_date).bind(&s.branch_id).bind(&s.branch_name)
         .bind(&s.course_id).bind(&s.course_name).bind(s.course_duration).bind(&s.course_duration_type)
-        .bind(s.current_course_year)
+        .bind(s.current_course_year).bind(s.current_course_period)
         .bind(&s.student_name).bind(&s.category).bind(&s.religion).bind(&s.caste).bind(&s.gender)
         .bind(&s.aadhar).bind(&s.address).bind(&s.student_phone).bind(&s.parent_phone)
         .bind(s.fee_year_1).bind(s.fee_year_2).bind(s.fee_year_3).bind(s.fee_year_4)
@@ -334,7 +354,7 @@ pub async fn get_students(
              COALESCE(c.name, s.course_name) AS course_name,
              COALESCE(c.duration, s.course_duration) AS course_duration,
              COALESCE(c.duration_type, s.course_duration_type) AS course_duration_type,
-             s.current_course_year, s.student_name, s.category, s.religion, s.caste, s.gender, s.aadhar, s.address,
+             s.current_course_year, s.current_course_period, s.student_name, s.category, s.religion, s.caste, s.gender, s.aadhar, s.address,
              s.student_phone, s.parent_phone, s.fee_year_1, s.fee_year_2, s.fee_year_3,
              s.fee_year_4, s.tuition_fee_year_1, s.tuition_fee_year_2, s.tuition_fee_year_3,
              s.tuition_fee_year_4, s.other_fee_year_1, s.other_fee_year_2, s.other_fee_year_3,
@@ -353,7 +373,7 @@ pub async fn get_students(
              COALESCE(c.name, s.course_name) AS course_name,
              COALESCE(c.duration, s.course_duration) AS course_duration,
              COALESCE(c.duration_type, s.course_duration_type) AS course_duration_type,
-             s.current_course_year, s.student_name, s.category, s.religion, s.caste, s.gender, s.aadhar, s.address,
+             s.current_course_year, s.current_course_period, s.student_name, s.category, s.religion, s.caste, s.gender, s.aadhar, s.address,
              s.student_phone, s.parent_phone, s.fee_year_1, s.fee_year_2, s.fee_year_3,
              s.fee_year_4, s.tuition_fee_year_1, s.tuition_fee_year_2, s.tuition_fee_year_3,
              s.tuition_fee_year_4, s.other_fee_year_1, s.other_fee_year_2, s.other_fee_year_3,
@@ -433,6 +453,7 @@ fn row_to_student(row: &sqlx::sqlite::SqliteRow) -> CachedStudent {
         course_duration: row.get("course_duration"),
         course_duration_type: row.get("course_duration_type"),
         current_course_year: row.get("current_course_year"),
+        current_course_period: row.get("current_course_period"),
         student_name: row.get("student_name"),
         category: row.get("category"),
         religion: row.get("religion"),

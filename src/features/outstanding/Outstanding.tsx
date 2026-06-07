@@ -71,6 +71,13 @@ function yearBreakdown(row: OutstandingRow, year: number) {
 }
 
 function currentCourseYear(row: OutstandingRow) {
+  if (row.current_course_period) {
+    return Math.min(
+      Math.max(Math.ceil(row.current_course_period / 2), 1),
+      getCourseDuration(row).totalYears,
+    );
+  }
+
   return Math.min(
     Math.max(row.current_course_year ?? 1, 1),
     getCourseDuration(row).totalYears,

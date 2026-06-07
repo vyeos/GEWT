@@ -44,6 +44,17 @@ export function getCourseDuration(source: CourseDurationSource) {
   };
 }
 
+export function getCurrentCoursePeriod(student: Student) {
+  const { totalSemesters } = getCourseDuration(student);
+  const period =
+    student.current_course_period ??
+    (student.current_course_year
+      ? (student.current_course_year - 1) * 2 + 1
+      : undefined);
+
+  return Math.min(Math.max(period ?? 1, 1), totalSemesters);
+}
+
 export function getCourseBillingPeriods(
   source: CourseDurationSource,
 ): CourseBillingPeriod[] {
@@ -87,6 +98,14 @@ export function getCurrentCourseYear(
   academicStartMonth: number,
   now = new Date(),
 ) {
+  if (student.current_course_period) {
+    const { totalYears } = getCourseDuration(student);
+    return Math.min(
+      Math.max(Math.ceil(getCurrentCoursePeriod(student) / 2), 1),
+      totalYears,
+    );
+  }
+
   if (student.current_course_year) {
     const { totalYears } = getCourseDuration(student);
     return Math.min(Math.max(student.current_course_year, 1), totalYears);
@@ -104,4 +123,8 @@ export function getCurrentCourseYear(
 
 export function formatCourseYear(year: number) {
   return `${ordinal(year)} Year`;
+}
+
+export function formatCoursePeriod(student: Student, period: number) {
+  return `${student.course_duration_type === "semester" ? "Semester" : "Term"} ${period}`;
 }

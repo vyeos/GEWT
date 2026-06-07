@@ -43,6 +43,7 @@ export type Student = {
   course_duration: number;
   course_duration_type: "year" | "semester";
   current_course_year?: number;
+  current_course_period?: number;
   student_name: string;
   category: string;
   religion: string;

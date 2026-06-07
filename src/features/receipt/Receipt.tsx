@@ -43,8 +43,10 @@ import {
   syncStudents,
 } from "@/lib/cache";
 import {
+  formatCoursePeriod,
   formatCourseYear,
   getCourseBillingPeriods,
+  getCurrentCoursePeriod,
   getCurrentCourseYear,
 } from "@/lib/course-duration";
 import { money, today } from "@/lib/format";
@@ -121,6 +123,9 @@ export function Receipt({
   const selectedStudent = students.find((student) => student.id === studentId);
   const selectedStudentCurrentYear = selectedStudent
     ? getCurrentCourseYear(selectedStudent, me.academic_year_start_month)
+    : null;
+  const selectedStudentCurrentPeriod = selectedStudent
+    ? getCurrentCoursePeriod(selectedStudent)
     : null;
   const selectedBranch = branches.find(
     (branch) => branch.id === selectedStudent?.branch_id,
@@ -292,10 +297,7 @@ export function Receipt({
         ],
       },
     ];
-    const currentYear = getCurrentCourseYear(
-      selectedStudent,
-      me.academic_year_start_month,
-    );
+    const currentPeriod = getCurrentCoursePeriod(selectedStudent);
 
     const paidByType = new Map<string, number>();
     for (const r of studentReceipts) {
@@ -314,7 +316,7 @@ export function Receipt({
     for (const [feeTypeOrder, group] of feeGroups.entries()) {
       let paid = paidByType.get(group.feeType) ?? 0;
       for (const period of periods) {
-        if (period.year > currentYear) break;
+        if ((period.semester ?? period.year) > currentPeriod) break;
         const yearlyFee = group.fees[period.year - 1] ?? 0;
         const periodFee = period.semester ? yearlyFee / 2 : yearlyFee;
         const deduct = Math.min(paid, periodFee);
@@ -333,7 +335,7 @@ export function Receipt({
       (a, b) =>
         b.periodOrder - a.periodOrder || a.feeTypeOrder - b.feeTypeOrder,
     );
-  }, [selectedStudent, studentReceipts, me.academic_year_start_month]);
+  }, [selectedStudent, studentReceipts]);
   const amountMax = useMemo(
     () =>
       selectedStudent
@@ -709,10 +711,22 @@ export function Receipt({
                 </Select>
               </div>
               <div className="flex flex-col gap-2">
-                <Label>Current course year</Label>
-                <div className="flex h-9 items-center rounded-md border bg-muted/40 px-3 text-sm">
-                  {selectedStudentCurrentYear ? (
-                    formatCourseYear(selectedStudentCurrentYear)
+                <Label>Current semester/term</Label>
+                <div className="flex h-9 items-center gap-2 rounded-md border bg-muted/40 px-3 text-sm">
+                  {selectedStudent && selectedStudentCurrentPeriod ? (
+                    <>
+                      <span>
+                        {formatCoursePeriod(
+                          selectedStudent,
+                          selectedStudentCurrentPeriod,
+                        )}
+                      </span>
+                      {selectedStudentCurrentYear ? (
+                        <span className="text-muted-foreground">
+                          ({formatCourseYear(selectedStudentCurrentYear)})
+                        </span>
+                      ) : null}
+                    </>
                   ) : (
                     <span className="text-muted-foreground">
                       Select student

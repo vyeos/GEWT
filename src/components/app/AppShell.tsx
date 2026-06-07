@@ -56,7 +56,7 @@ const nav: { key: Screen; label: string; desc: string; icon: ElementType }[] = [
   {
     key: "promote",
     label: "Promote",
-    desc: "Move students to next year",
+    desc: "Move students to next semester/term",
     icon: GraduationCap,
   },
   {

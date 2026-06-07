@@ -40,7 +40,9 @@ import {
 import { api } from "@/lib/api";
 import {
   formatCourseYear,
+  formatCoursePeriod,
   getCourseDuration,
+  getCurrentCoursePeriod,
   getCurrentCourseYear,
 } from "@/lib/course-duration";
 import { cn } from "@/lib/utils";
@@ -127,8 +129,8 @@ export function Promote({
       : "indeterminate";
 
   function canPromote(student: Student) {
-    const year = getCurrentCourseYear(student, me.academic_year_start_month);
-    return year < getCourseDuration(student).totalYears;
+    const period = getCurrentCoursePeriod(student);
+    return period < getCourseDuration(student).totalSemesters;
   }
 
   useEffect(() => {
@@ -208,7 +210,9 @@ export function Promote({
         toast.success(`Promoted ${result.promoted_count} student(s)`);
       }
       if (result.skipped_count > 0) {
-        toast.warning(`${result.skipped_count} student(s) already at final year`);
+        toast.warning(
+          `${result.skipped_count} student(s) already at final semester/term`,
+        );
       }
       onPromoted();
     } catch (error) {
@@ -367,6 +371,7 @@ export function Promote({
                   <TableHead>Student</TableHead>
                   <TableHead>Branch</TableHead>
                   <TableHead>Course</TableHead>
+                  <TableHead>Current Period</TableHead>
                   <TableHead>Current Year</TableHead>
                 </TableRow>
               </TableHeader>
@@ -376,8 +381,9 @@ export function Promote({
                     student,
                     me.academic_year_start_month,
                   );
-                  const totalYears = getCourseDuration(student).totalYears;
-                  const eligible = currentYear < totalYears;
+                  const currentPeriod = getCurrentCoursePeriod(student);
+                  const totalPeriods = getCourseDuration(student).totalSemesters;
+                  const eligible = currentPeriod < totalPeriods;
                   return (
                     <TableRow
                       key={student.id}
@@ -403,6 +409,9 @@ export function Promote({
                       <TableCell>
                         <Badge variant="secondary">{student.course_name}</Badge>
                       </TableCell>
+                      <TableCell>
+                        {formatCoursePeriod(student, currentPeriod)}
+                      </TableCell>
                       <TableCell>{formatCourseYear(currentYear)}</TableCell>
                     </TableRow>
                   );
@@ -420,7 +429,7 @@ export function Promote({
             <AlertDialogDescription>
               Promote {selectedStudents.length} selected student(s) from{" "}
               {selectedCourse?.name} admission year {admissionYearValue} to the
-              next course year?
+              next semester/term?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

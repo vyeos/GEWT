@@ -115,6 +115,7 @@ struct Student {
     course_duration: i32,
     course_duration_type: String,
     current_course_year: i32,
+    current_course_period: i32,
     student_name: String,
     category: String,
     religion: String,
@@ -320,6 +321,7 @@ struct SyncStudent {
     course_duration: i32,
     course_duration_type: String,
     current_course_year: i32,
+    current_course_period: i32,
     student_name: String,
     category: String,
     religion: String,
@@ -707,7 +709,7 @@ async fn promote_students(
         .into_iter()
         .filter(|student_id| seen.insert(*student_id))
         .collect();
-    let max_year = total_course_years(course.duration, &course.duration_type);
+    let max_period = total_course_periods(course.duration, &course.duration_type);
 
     let mut tx = state.pool.begin().await?;
     let candidate_ids: Vec<Uuid> = sqlx::query_scalar(
@@ -733,14 +735,15 @@ async fn promote_students(
 
     let promoted_ids: Vec<Uuid> = sqlx::query_scalar(
         "UPDATE students
-         SET current_course_year = current_course_year + 1,
+         SET current_course_period = current_course_period + 1,
+             current_course_year = (current_course_period + 2) / 2,
              updated_at = now()
          WHERE id = ANY($1)
-           AND current_course_year < $2
+           AND current_course_period < $2
          RETURNING id",
     )
     .bind(&candidate_ids)
-    .bind(max_year)
+    .bind(max_period)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -1548,7 +1551,7 @@ async fn load_student(pool: &PgPool, id: Uuid) -> ApiResult<Student> {
 fn student_select(where_clause: &str) -> String {
     format!(
         "SELECT s.id, s.form_no, s.admission_date, s.branch_id, b.name AS branch_name, s.course_id, c.name AS course_name,
-        c.duration AS course_duration, c.duration_type AS course_duration_type, s.current_course_year,
+        c.duration AS course_duration, c.duration_type AS course_duration_type, s.current_course_year, s.current_course_period,
         s.student_name, s.category, s.religion, s.caste, s.gender,
         s.aadhar, s.address, s.student_phone, s.parent_phone,
         s.fee_year_1::float8 AS fee_year_1, s.fee_year_2::float8 AS fee_year_2, s.fee_year_3::float8 AS fee_year_3, s.fee_year_4::float8 AS fee_year_4,
@@ -1565,7 +1568,7 @@ fn student_select(where_clause: &str) -> String {
 fn sync_student_select(where_clause: &str) -> String {
     format!(
         "SELECT s.id, s.form_no, s.admission_date, s.branch_id, b.name AS branch_name, s.course_id, c.name AS course_name,
-        c.duration AS course_duration, c.duration_type AS course_duration_type, s.current_course_year,
+        c.duration AS course_duration, c.duration_type AS course_duration_type, s.current_course_year, s.current_course_period,
         s.student_name, s.category, s.religion, s.caste, s.gender,
         s.aadhar, s.address, s.student_phone, s.parent_phone,
         s.fee_year_1::float8 AS fee_year_1, s.fee_year_2::float8 AS fee_year_2, s.fee_year_3::float8 AS fee_year_3, s.fee_year_4::float8 AS fee_year_4,
@@ -1588,22 +1591,27 @@ fn total_course_years(duration: i32, duration_type: &str) -> i32 {
     years.clamp(1, 4)
 }
 
-fn current_course_year(student: &Student) -> i32 {
-    student.current_course_year.clamp(
+fn total_course_periods(duration: i32, duration_type: &str) -> i32 {
+    if duration_type == "semester" {
+        duration.clamp(1, 8)
+    } else {
+        total_course_years(duration, duration_type) * 2
+    }
+}
+
+fn current_course_period(student: &Student) -> i32 {
+    student.current_course_period.clamp(
         1,
-        total_course_years(student.course_duration, &student.course_duration_type),
+        total_course_periods(student.course_duration, &student.course_duration_type),
     )
 }
 
 fn current_period_label(student: &Student) -> String {
-    let current_year = current_course_year(student);
+    let current_period = current_course_period(student);
     if student.course_duration_type == "semester" {
-        let semester = (current_year * 2)
-            .min(student.course_duration)
-            .max(1);
-        return format!("Semester {semester}");
+        return format!("Semester {current_period}");
     }
-    format!("Year {current_year}")
+    format!("Term {current_period}")
 }
 
 fn fee_breakdown(due: f64, paid: f64) -> OutstandingFeeBreakdown {
@@ -1618,23 +1626,17 @@ fn allocate_fee_by_year(
     yearly_fees: [f64; 4],
     course_duration: i32,
     duration_type: &str,
-    current_year: i32,
+    current_period: i32,
     mut paid: f64,
 ) -> Vec<OutstandingFeeBreakdown> {
     let total_years = total_course_years(course_duration, duration_type) as usize;
-    let total_semesters = if duration_type == "semester" {
-        course_duration as usize
-    } else {
-        (course_duration as usize) * 2
-    };
-    let due_semesters = ((current_year as usize) * 2)
-        .min(total_semesters)
-        .max(1);
+    let total_periods = total_course_periods(course_duration, duration_type) as usize;
+    let due_periods = (current_period as usize).min(total_periods).max(1);
     let mut due_by_year = [0.0; 4];
     let mut paid_by_year = [0.0; 4];
 
-    for semester_index in 0..due_semesters {
-        let year_index = semester_index / 2;
+    for period_index in 0..due_periods {
+        let year_index = period_index / 2;
         let period_due = yearly_fees[year_index] / 2.0;
         let period_paid = paid.min(period_due);
         paid -= period_paid;
@@ -1652,9 +1654,7 @@ fn outstanding_year_breakdown(
     tuition_paid: f64,
     other_paid: f64,
 ) -> Vec<OutstandingYearBreakdown> {
-    let current_year = student
-        .current_course_year
-        .clamp(1, total_course_years(student.course_duration, &student.course_duration_type));
+    let current_period = current_course_period(student);
     let tuition = allocate_fee_by_year(
         [
             student.tuition_fee_year_1,
@@ -1664,7 +1664,7 @@ fn outstanding_year_breakdown(
         ],
         student.course_duration,
         &student.course_duration_type,
-        current_year,
+        current_period,
         tuition_paid,
     );
     let other = allocate_fee_by_year(
@@ -1676,7 +1676,7 @@ fn outstanding_year_breakdown(
         ],
         student.course_duration,
         &student.course_duration_type,
-        current_year,
+        current_period,
         other_paid,
     );
     let total_years = total_course_years(student.course_duration, &student.course_duration_type);
