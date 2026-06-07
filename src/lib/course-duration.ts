@@ -48,13 +48,14 @@ export function getCourseBillingPeriods(
   source: CourseDurationSource,
 ): CourseBillingPeriod[] {
   const duration = getCourseDuration(source);
+  const periodName = duration.type === "semester" ? "Semester" : "Term";
 
   return Array.from({ length: duration.totalSemesters }, (_, index) => {
     const semester = index + 1;
     return {
       year: Math.ceil(semester / 2),
       semester,
-      label: `Sem ${semester}`,
+      label: `${periodName} ${semester}`,
     };
   });
 }

@@ -301,13 +301,14 @@ export function Receipt({
     }
     const rows: {
       feeType: string;
-      year: number;
-      sem: string;
+      period: string;
+      periodOrder: number;
+      feeTypeOrder: number;
       total: number;
       pending: number;
     }[] = [];
     const periods = getCourseBillingPeriods(selectedStudent);
-    for (const group of feeGroups) {
+    for (const [feeTypeOrder, group] of feeGroups.entries()) {
       let paid = paidByType.get(group.feeType) ?? 0;
       for (const period of periods) {
         if (period.year > currentYear) break;
@@ -317,14 +318,18 @@ export function Receipt({
         paid -= deduct;
         rows.push({
           feeType: group.feeType,
-          year: period.year,
-          sem: period.semester ? period.label : "—",
+          period: period.label,
+          periodOrder: period.semester ?? period.year,
+          feeTypeOrder,
           total: periodFee,
           pending: periodFee - deduct,
         });
       }
     }
-    return rows;
+    return rows.sort(
+      (a, b) =>
+        b.periodOrder - a.periodOrder || a.feeTypeOrder - b.feeTypeOrder,
+    );
   }, [selectedStudent, studentReceipts, me.academic_year_start_month]);
   const amountMax = useMemo(
     () =>
@@ -335,6 +340,8 @@ export function Receipt({
         : undefined,
     [feeStatusRows, feeType, selectedStudent],
   );
+  const feeStatusPeriodLabel =
+    selectedStudent?.course_duration_type === "semester" ? "Semester" : "Term";
 
   useEffect(() => {
     if (amountMax !== undefined && amount > amountMax) {
@@ -880,8 +887,9 @@ export function Receipt({
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-[22%]">Fee Type</TableHead>
-                      <TableHead className="w-[16%]">Year</TableHead>
-                      <TableHead className="w-[16%]">Sem</TableHead>
+                      <TableHead className="w-[32%]">
+                        {feeStatusPeriodLabel}
+                      </TableHead>
                       <TableHead className="w-[23%] text-right">
                         Total
                       </TableHead>
@@ -894,8 +902,7 @@ export function Receipt({
                     {feeStatusRows.map((row, i) => (
                       <TableRow key={i}>
                         <TableCell>{row.feeType}</TableCell>
-                        <TableCell>{row.year || "—"}</TableCell>
-                        <TableCell>{row.sem}</TableCell>
+                        <TableCell>{row.period}</TableCell>
                         <TableCell className="text-right">
                           {money(row.total)}
                         </TableCell>
