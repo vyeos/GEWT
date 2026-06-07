@@ -8,6 +8,7 @@ import {
 import {
   Download,
   FileText,
+  GraduationCap,
   LogOut,
   Moon,
   ReceiptText,
@@ -51,6 +52,12 @@ const nav: { key: Screen; label: string; desc: string; icon: ElementType }[] = [
     label: "Fee Receipt",
     desc: "Record fee payments",
     icon: ReceiptText,
+  },
+  {
+    key: "promote",
+    label: "Promote",
+    desc: "Move students to next year",
+    icon: GraduationCap,
   },
   {
     key: "outstanding",

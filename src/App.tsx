@@ -6,6 +6,7 @@ import { branchesSeed } from "@/data/seeds";
 import { Admission } from "@/features/admission/Admission";
 import { Login } from "@/features/login/Login";
 import { Outstanding } from "@/features/outstanding/Outstanding";
+import { Promote } from "@/features/promote/Promote";
 import { Receipt } from "@/features/receipt/Receipt";
 import { Utility } from "@/features/utility/Utility";
 import { api, ApiRequestError } from "@/lib/api";
@@ -195,6 +196,16 @@ function App() {
           branches={branches}
           courses={courses}
           refreshKey={screenRefreshKey}
+        />
+      )}
+      {screen === "promote" && (
+        <Promote
+          token={token}
+          me={me}
+          branches={branches}
+          courses={courses}
+          refreshKey={screenRefreshKey}
+          onPromoted={() => void refreshCurrentScreen()}
         />
       )}
       {screen === "outstanding" && (

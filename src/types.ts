@@ -3,6 +3,7 @@ export type Role = "admin" | "employee";
 export type Screen =
   | "admission"
   | "receipt"
+  | "promote"
   | "outstanding"
   | "utility";
 
@@ -41,6 +42,7 @@ export type Student = {
   course_name: string;
   course_duration: number;
   course_duration_type: "year" | "semester";
+  current_course_year?: number;
   student_name: string;
   category: string;
   religion: string;

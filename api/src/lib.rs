@@ -10,13 +10,13 @@ use axum::{
     routing::{get, patch, post},
     Json, Router,
 };
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, FromRow, PgPool, Postgres, Transaction};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     net::SocketAddr,
     path::{Path as StdPath, PathBuf},
@@ -114,6 +114,7 @@ struct Student {
     course_name: String,
     course_duration: i32,
     course_duration_type: String,
+    current_course_year: i32,
     student_name: String,
     category: String,
     religion: String,
@@ -218,6 +219,20 @@ struct StudentFees {
 }
 
 #[derive(Deserialize)]
+struct PromoteRequest {
+    course_id: Uuid,
+    admission_year: i32,
+    student_ids: Vec<Uuid>,
+}
+
+#[derive(Serialize)]
+struct PromoteResponse {
+    promoted_count: usize,
+    skipped_count: usize,
+    students: Vec<Student>,
+}
+
+#[derive(Deserialize)]
 struct ReceiptRequest {
     receipt_no: Option<String>,
     student_id: Uuid,
@@ -280,6 +295,7 @@ struct SyncStudent {
     course_name: String,
     course_duration: i32,
     course_duration_type: String,
+    current_course_year: i32,
     student_name: String,
     category: String,
     religion: String,
@@ -362,6 +378,7 @@ async fn run_server() -> anyhow::Result<()> {
         .route("/courses/:id", patch(update_course))
         .route("/students/next-form-no", get(next_form_no))
         .route("/students", get(students).post(create_student))
+        .route("/students/promote", post(promote_students))
         .route("/students/:id", get(student).patch(update_student))
         .route("/receipts/next-receipt-no", get(next_receipt_no))
         .route("/receipts", get(receipts).post(create_receipt))
@@ -634,6 +651,81 @@ async fn update_student(
     .execute(&state.pool)
     .await?;
     Ok(Json(load_student(&state.pool, id).await?))
+}
+
+async fn promote_students(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PromoteRequest>,
+) -> ApiResult<Json<PromoteResponse>> {
+    let auth = claims(&state, &headers)?;
+    if req.student_ids.is_empty() {
+        return Err(ApiError::BadRequest(
+            "Select at least one student to promote".to_string(),
+        ));
+    }
+    if !(1900..=2200).contains(&req.admission_year) {
+        return Err(ApiError::BadRequest("Invalid admission year".to_string()));
+    }
+
+    let course: Course = sqlx::query_as(
+        "SELECT id, branch_id, name, duration, duration_type FROM courses WHERE id=$1 AND active = true",
+    )
+    .bind(req.course_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| ApiError::BadRequest("Course not found".to_string()))?;
+    ensure_branch(&auth, course.branch_id)?;
+
+    let mut seen = HashSet::new();
+    let student_ids: Vec<Uuid> = req
+        .student_ids
+        .into_iter()
+        .filter(|student_id| seen.insert(*student_id))
+        .collect();
+    let max_year = total_course_years(course.duration, &course.duration_type);
+
+    let mut tx = state.pool.begin().await?;
+    let candidate_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT s.id
+         FROM students s
+         WHERE s.id = ANY($1)
+           AND s.course_id = $2
+           AND s.branch_id = $3
+           AND EXTRACT(YEAR FROM s.admission_date)::int = $4",
+    )
+    .bind(&student_ids)
+    .bind(course.id)
+    .bind(course.branch_id)
+    .bind(req.admission_year)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    if candidate_ids.len() != student_ids.len() {
+        return Err(ApiError::BadRequest(
+            "Selected students do not match the chosen course and admission year".to_string(),
+        ));
+    }
+
+    let promoted_ids: Vec<Uuid> = sqlx::query_scalar(
+        "UPDATE students
+         SET current_course_year = current_course_year + 1,
+             updated_at = now()
+         WHERE id = ANY($1)
+           AND current_course_year < $2
+         RETURNING id",
+    )
+    .bind(&candidate_ids)
+    .bind(max_year)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    Ok(Json(PromoteResponse {
+        promoted_count: promoted_ids.len(),
+        skipped_count: candidate_ids.len().saturating_sub(promoted_ids.len()),
+        students: load_students_by_ids(&state.pool, &candidate_ids).await?,
+    }))
 }
 
 async fn next_form_no(
@@ -1397,6 +1489,18 @@ async fn load_students(pool: &PgPool, branch_id: Option<Uuid>) -> ApiResult<Vec<
     }
 }
 
+async fn load_students_by_ids(pool: &PgPool, ids: &[Uuid]) -> ApiResult<Vec<Student>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    sqlx::query_as(student_select("WHERE s.id = ANY($1)").as_str())
+        .bind(ids)
+        .fetch_all(pool)
+        .await
+        .map_err(ApiError::from)
+}
+
 async fn load_student(pool: &PgPool, id: Uuid) -> ApiResult<Student> {
     sqlx::query_as(student_select("WHERE s.id=$1").as_str())
         .bind(id)
@@ -1408,7 +1512,8 @@ async fn load_student(pool: &PgPool, id: Uuid) -> ApiResult<Student> {
 fn student_select(where_clause: &str) -> String {
     format!(
         "SELECT s.id, s.form_no, s.admission_date, s.branch_id, b.name AS branch_name, s.course_id, c.name AS course_name,
-        c.duration AS course_duration, c.duration_type AS course_duration_type, s.student_name, s.category, s.religion, s.caste, s.gender,
+        c.duration AS course_duration, c.duration_type AS course_duration_type, s.current_course_year,
+        s.student_name, s.category, s.religion, s.caste, s.gender,
         s.aadhar, s.address, s.student_phone, s.parent_phone,
         s.fee_year_1::float8 AS fee_year_1, s.fee_year_2::float8 AS fee_year_2, s.fee_year_3::float8 AS fee_year_3, s.fee_year_4::float8 AS fee_year_4,
         s.tuition_fee_year_1::float8 AS tuition_fee_year_1, s.tuition_fee_year_2::float8 AS tuition_fee_year_2, s.tuition_fee_year_3::float8 AS tuition_fee_year_3, s.tuition_fee_year_4::float8 AS tuition_fee_year_4,
@@ -1424,7 +1529,8 @@ fn student_select(where_clause: &str) -> String {
 fn sync_student_select(where_clause: &str) -> String {
     format!(
         "SELECT s.id, s.form_no, s.admission_date, s.branch_id, b.name AS branch_name, s.course_id, c.name AS course_name,
-        c.duration AS course_duration, c.duration_type AS course_duration_type, s.student_name, s.category, s.religion, s.caste, s.gender,
+        c.duration AS course_duration, c.duration_type AS course_duration_type, s.current_course_year,
+        s.student_name, s.category, s.religion, s.caste, s.gender,
         s.aadhar, s.address, s.student_phone, s.parent_phone,
         s.fee_year_1::float8 AS fee_year_1, s.fee_year_2::float8 AS fee_year_2, s.fee_year_3::float8 AS fee_year_3, s.fee_year_4::float8 AS fee_year_4,
         s.tuition_fee_year_1::float8 AS tuition_fee_year_1, s.tuition_fee_year_2::float8 AS tuition_fee_year_2, s.tuition_fee_year_3::float8 AS tuition_fee_year_3, s.tuition_fee_year_4::float8 AS tuition_fee_year_4,
@@ -1437,19 +1543,20 @@ fn sync_student_select(where_clause: &str) -> String {
     )
 }
 
-fn academic_year_for(date: NaiveDate, academic_start_month: i32) -> i32 {
-    if (date.month() as i32) >= academic_start_month {
-        date.year()
+fn total_course_years(duration: i32, duration_type: &str) -> i32 {
+    let years = if duration_type == "semester" {
+        (duration + 1) / 2
     } else {
-        date.year() - 1
-    }
+        duration
+    };
+    years.clamp(1, 4)
 }
 
-fn due_for_student(student: &Student, academic_start_month: i32) -> (f64, String) {
-    let now = Utc::now().date_naive();
-    let years_elapsed = academic_year_for(now, academic_start_month)
-        - academic_year_for(student.admission_date, academic_start_month);
-    let current_year = (years_elapsed + 1).clamp(1, 4) as usize;
+fn due_for_student(student: &Student, _academic_start_month: i32) -> (f64, String) {
+    let current_year = student
+        .current_course_year
+        .clamp(1, total_course_years(student.course_duration, &student.course_duration_type))
+        as usize;
     let fees = [
         student.tuition_fee_year_1,
         student.tuition_fee_year_2,

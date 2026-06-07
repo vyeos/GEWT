@@ -87,6 +87,11 @@ export function getCurrentCourseYear(
   academicStartMonth: number,
   now = new Date(),
 ) {
+  if (student.current_course_year) {
+    const { totalYears } = getCourseDuration(student);
+    return Math.min(Math.max(student.current_course_year, 1), totalYears);
+  }
+
   const admission = new Date(student.admission_date);
   const currentYear =
     academicYearFor(now, academicStartMonth) -
