@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Settings,
   Sun,
+  Users,
   UserPlus,
 } from "lucide-react";
 import { Toaster } from "sonner";
@@ -40,7 +41,13 @@ import { cn } from "@/lib/utils";
 import type { Me, Screen } from "@/types";
 import type { UpdateStatus } from "@/lib/updater";
 
-const nav: { key: Screen; label: string; desc: string; icon: ElementType }[] = [
+const nav: {
+  key: Screen;
+  label: string;
+  desc: string;
+  icon: ElementType;
+  adminOnly?: boolean;
+}[] = [
   {
     key: "admission",
     label: "Admission",
@@ -64,6 +71,13 @@ const nav: { key: Screen; label: string; desc: string; icon: ElementType }[] = [
     label: "Outstanding",
     desc: "Pending fee report",
     icon: FileText,
+  },
+  {
+    key: "students",
+    label: "Students",
+    desc: "Review and edit admissions",
+    icon: Users,
+    adminOnly: true,
   },
   {
     key: "utility",
@@ -160,21 +174,23 @@ export function AppShell({
         </div>
 
         <nav className="flex flex-1 flex-col gap-1 p-2">
-          {nav.map((item) => {
-            const Icon = item.icon;
-            const active = screen === item.key;
-            return (
-              <Button
-                key={item.key}
-                onClick={() => onScreenChange(item.key)}
-                variant={active ? "outline" : "ghost"}
-                className={cn("justify-start gap-3 transition-colors")}
-              >
-                <Icon className="size-4" />
-                {item.label}
-              </Button>
-            );
-          })}
+          {nav
+            .filter((item) => !item.adminOnly || me.role === "admin")
+            .map((item) => {
+              const Icon = item.icon;
+              const active = screen === item.key;
+              return (
+                <Button
+                  key={item.key}
+                  onClick={() => onScreenChange(item.key)}
+                  variant={active ? "outline" : "ghost"}
+                  className={cn("justify-start gap-3 transition-colors")}
+                >
+                  <Icon className="size-4" />
+                  {item.label}
+                </Button>
+              );
+            })}
         </nav>
 
         <div className="border-t p-3">

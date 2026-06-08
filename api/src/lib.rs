@@ -137,6 +137,8 @@ struct Student {
     other_fee_year_2: f64,
     other_fee_year_3: f64,
     other_fee_year_4: f64,
+    admission_cancelled: bool,
+    admission_cancelled_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -235,12 +237,23 @@ struct StudentRequest {
     other_fee_year_2: Option<f64>,
     other_fee_year_3: Option<f64>,
     other_fee_year_4: Option<f64>,
+    current_course_period: Option<i32>,
 }
 
 struct StudentFees {
     yearly: [f64; 4],
     tuition: [f64; 4],
     other: [f64; 4],
+}
+
+impl StudentFees {
+    fn zero() -> Self {
+        Self {
+            yearly: [0.0; 4],
+            tuition: [0.0; 4],
+            other: [0.0; 4],
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -343,6 +356,8 @@ struct SyncStudent {
     other_fee_year_2: f64,
     other_fee_year_3: f64,
     other_fee_year_4: f64,
+    admission_cancelled: bool,
+    admission_cancelled_at: Option<DateTime<Utc>>,
     updated_at: chrono::DateTime<Utc>,
 }
 
@@ -405,6 +420,7 @@ async fn run_server() -> anyhow::Result<()> {
         .route("/students/next-form-no", get(next_form_no))
         .route("/students", get(students).post(create_student))
         .route("/students/promote", post(promote_students))
+        .route("/students/:id/cancel", post(cancel_student))
         .route("/students/:id", get(student).patch(update_student))
         .route("/receipts/next-receipt-no", get(next_receipt_no))
         .route("/receipts", get(receipts).post(create_receipt))
@@ -570,10 +586,22 @@ async fn update_course(
 async fn students(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
 ) -> ApiResult<Json<Vec<Student>>> {
     let auth = claims(&state, &headers)?;
+    let include_cancelled = params
+        .get("include_cancelled")
+        .is_some_and(|value| value == "true");
+    if include_cancelled && auth.role != "admin" {
+        return Err(ApiError::Forbidden);
+    }
     Ok(Json(
-        load_students(&state.pool, auth.branch_id.filter(|_| auth.role != "admin")).await?,
+        load_students(
+            &state.pool,
+            auth.branch_id.filter(|_| auth.role != "admin"),
+            include_cancelled,
+        )
+        .await?,
     ))
 }
 
@@ -584,6 +612,9 @@ async fn student(
 ) -> ApiResult<Json<Student>> {
     let auth = claims(&state, &headers)?;
     let row = load_student(&state.pool, id).await?;
+    if row.admission_cancelled && auth.role != "admin" {
+        return Err(ApiError::Forbidden);
+    }
     ensure_branch(&auth, row.branch_id)?;
     Ok(Json(row))
 }
@@ -595,6 +626,12 @@ async fn create_student(
 ) -> ApiResult<Json<Student>> {
     let auth = claims(&state, &headers)?;
     ensure_branch(&auth, req.branch_id)?;
+    let course = load_course(&state.pool, req.course_id).await?;
+    if course.branch_id != req.branch_id {
+        return Err(ApiError::BadRequest(
+            "Course does not belong to the selected branch".to_string(),
+        ));
+    }
     let fees = normalize_student_fees(&req)?;
     let mut tx = state.pool.begin().await?;
     let form_no = resolve_student_form_no(&mut tx, req.form_no.as_deref()).await?;
@@ -644,14 +681,37 @@ async fn update_student(
     let auth = claims(&state, &headers)?;
     ensure_branch(&auth, req.branch_id)?;
     let existing = load_student(&state.pool, id).await?;
+    if existing.admission_cancelled && auth.role != "admin" {
+        return Err(ApiError::Forbidden);
+    }
     ensure_branch(&auth, existing.branch_id)?;
-    let fees = normalize_student_fees(&req)?;
+    let mut fees = normalize_student_fees(&req)?;
+    if existing.admission_cancelled {
+        fees = StudentFees::zero();
+    }
+    let course = load_course(&state.pool, req.course_id).await?;
+    if course.branch_id != req.branch_id {
+        return Err(ApiError::BadRequest(
+            "Course does not belong to the selected branch".to_string(),
+        ));
+    }
+    let current_course_period = normalize_current_course_period(
+        req.current_course_period
+            .unwrap_or(existing.current_course_period),
+        &course,
+    )?;
+    let current_course_year = current_course_year_from_period(current_course_period);
+    let form_no = normalize_student_form_no(req.form_no.as_deref())?;
+    ensure_unique_student_form_no(&state.pool, &form_no, id).await?;
     sqlx::query(
-        "UPDATE students SET admission_date=$1, branch_id=$2, course_id=$3, student_name=$4, category=$5, religion=$6, caste=$7, gender=$8, aadhar=$9, address=$10, student_phone=$11, parent_phone=$12, fee_year_1=$13, fee_year_2=$14, fee_year_3=$15, fee_year_4=$16, tuition_fee_year_1=$17, tuition_fee_year_2=$18, tuition_fee_year_3=$19, tuition_fee_year_4=$20, other_fee_year_1=$21, other_fee_year_2=$22, other_fee_year_3=$23, other_fee_year_4=$24, updated_at=now() WHERE id=$25",
+        "UPDATE students SET form_no=$1, admission_date=$2, branch_id=$3, course_id=$4, current_course_year=$5, current_course_period=$6, student_name=$7, category=$8, religion=$9, caste=$10, gender=$11, aadhar=$12, address=$13, student_phone=$14, parent_phone=$15, fee_year_1=$16, fee_year_2=$17, fee_year_3=$18, fee_year_4=$19, tuition_fee_year_1=$20, tuition_fee_year_2=$21, tuition_fee_year_3=$22, tuition_fee_year_4=$23, other_fee_year_1=$24, other_fee_year_2=$25, other_fee_year_3=$26, other_fee_year_4=$27, updated_at=now() WHERE id=$28",
     )
+    .bind(form_no)
     .bind(req.admission_date)
     .bind(req.branch_id)
     .bind(req.course_id)
+    .bind(current_course_year)
+    .bind(current_course_period)
     .bind(req.student_name)
     .bind(req.category)
     .bind(req.religion)
@@ -676,6 +736,45 @@ async fn update_student(
     .bind(id)
     .execute(&state.pool)
     .await?;
+    Ok(Json(load_student(&state.pool, id).await?))
+}
+
+async fn cancel_student(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<Student>> {
+    let auth = require_admin(&state, &headers)?;
+    let existing = load_student(&state.pool, id).await?;
+    if existing.admission_cancelled {
+        return Ok(Json(existing));
+    }
+
+    sqlx::query(
+        "UPDATE students
+         SET admission_cancelled = true,
+             admission_cancelled_at = now(),
+             admission_cancelled_by = $1,
+             fee_year_1 = 0,
+             fee_year_2 = 0,
+             fee_year_3 = 0,
+             fee_year_4 = 0,
+             tuition_fee_year_1 = 0,
+             tuition_fee_year_2 = 0,
+             tuition_fee_year_3 = 0,
+             tuition_fee_year_4 = 0,
+             other_fee_year_1 = 0,
+             other_fee_year_2 = 0,
+             other_fee_year_3 = 0,
+             other_fee_year_4 = 0,
+             updated_at = now()
+         WHERE id = $2",
+    )
+    .bind(auth.sub)
+    .bind(id)
+    .execute(&state.pool)
+    .await?;
+
     Ok(Json(load_student(&state.pool, id).await?))
 }
 
@@ -718,7 +817,8 @@ async fn promote_students(
          WHERE s.id = ANY($1)
            AND s.course_id = $2
            AND s.branch_id = $3
-           AND EXTRACT(YEAR FROM s.admission_date)::int = $4",
+           AND EXTRACT(YEAR FROM s.admission_date)::int = $4
+           AND s.admission_cancelled = false",
     )
     .bind(&student_ids)
     .bind(course.id)
@@ -751,7 +851,7 @@ async fn promote_students(
     Ok(Json(PromoteResponse {
         promoted_count: promoted_ids.len(),
         skipped_count: candidate_ids.len().saturating_sub(promoted_ids.len()),
-        students: load_students_by_ids(&state.pool, &candidate_ids).await?,
+        students: load_students_by_ids(&state.pool, &candidate_ids, false).await?,
     }))
 }
 
@@ -830,11 +930,17 @@ async fn create_receipt(
             "Reference number is required for this payment mode".to_string(),
         ));
     }
-    let branch_id: Uuid = sqlx::query_scalar("SELECT branch_id FROM students WHERE id=$1")
-        .bind(req.student_id)
-        .fetch_one(&state.pool)
-        .await?;
-    ensure_branch(&auth, branch_id)?;
+    let row: (Uuid, bool) =
+        sqlx::query_as("SELECT branch_id, admission_cancelled FROM students WHERE id=$1")
+            .bind(req.student_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if row.1 {
+        return Err(ApiError::BadRequest(
+            "Cannot record a receipt for a cancelled admission".to_string(),
+        ));
+    }
+    ensure_branch(&auth, row.0)?;
     let mut tx = state.pool.begin().await?;
     let receipt_no = resolve_receipt_no(&mut tx, req.receipt_no.as_deref()).await?;
     let row = sqlx::query_as(
@@ -845,7 +951,7 @@ async fn create_receipt(
     .bind(receipt_no)
     .bind(req.receipt_date)
     .bind(req.student_id)
-    .bind(branch_id)
+    .bind(row.0)
     .bind(req.fee_type)
     .bind(req.amount_paid)
     .bind(req.payment_mode)
@@ -888,8 +994,12 @@ async fn outstanding(
     headers: HeaderMap,
 ) -> ApiResult<Json<Vec<OutstandingRow>>> {
     let auth = claims(&state, &headers)?;
-    let all_students =
-        load_students(&state.pool, auth.branch_id.filter(|_| auth.role != "admin")).await?;
+    let all_students = load_students(
+        &state.pool,
+        auth.branch_id.filter(|_| auth.role != "admin"),
+        false,
+    )
+    .await?;
     let mut rows = Vec::new();
     for student in all_students {
         let paid_rows: Vec<PaidFeeType> = sqlx::query_as(
@@ -1420,6 +1530,47 @@ fn normalize_student_fees(req: &StudentRequest) -> ApiResult<StudentFees> {
     })
 }
 
+fn normalize_student_form_no(form_no: Option<&str>) -> ApiResult<String> {
+    form_no
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| ApiError::BadRequest("Form number is required".to_string()))
+}
+
+async fn ensure_unique_student_form_no(
+    pool: &PgPool,
+    form_no: &str,
+    student_id: Uuid,
+) -> ApiResult<()> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM students WHERE form_no = $1 AND id <> $2)")
+            .bind(form_no)
+            .bind(student_id)
+            .fetch_one(pool)
+            .await?;
+    if exists {
+        return Err(ApiError::BadRequest(
+            "Form number already exists".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_current_course_period(period: i32, course: &Course) -> ApiResult<i32> {
+    let max_period = total_course_periods(course.duration, &course.duration_type);
+    if period < 1 || period > max_period {
+        return Err(ApiError::BadRequest(format!(
+            "Current period must be between 1 and {max_period}"
+        )));
+    }
+    Ok(period)
+}
+
+fn current_course_year_from_period(period: i32) -> i32 {
+    ((period + 1) / 2).max(1)
+}
+
 fn hash_password(password: &str) -> ApiResult<String> {
     let salt = SaltString::generate(&mut rand_core::OsRng);
     Argon2::default()
@@ -1513,31 +1664,61 @@ async fn resolve_receipt_no(
     Ok(next)
 }
 
-async fn load_students(pool: &PgPool, branch_id: Option<Uuid>) -> ApiResult<Vec<Student>> {
-    if let Some(branch_id) = branch_id {
-        sqlx::query_as(student_select("WHERE s.branch_id=$1").as_str())
+async fn load_students(
+    pool: &PgPool,
+    branch_id: Option<Uuid>,
+    include_cancelled: bool,
+) -> ApiResult<Vec<Student>> {
+    match (branch_id, include_cancelled) {
+        (Some(branch_id), true) => sqlx::query_as(student_select("WHERE s.branch_id=$1").as_str())
             .bind(branch_id)
             .fetch_all(pool)
             .await
-            .map_err(ApiError::from)
-    } else {
-        sqlx::query_as(student_select("").as_str())
+            .map_err(ApiError::from),
+        (Some(branch_id), false) => sqlx::query_as(
+            student_select("WHERE s.branch_id=$1 AND s.admission_cancelled = false").as_str(),
+        )
+        .bind(branch_id)
+        .fetch_all(pool)
+        .await
+        .map_err(ApiError::from),
+        (None, true) => sqlx::query_as(student_select("").as_str())
             .fetch_all(pool)
             .await
-            .map_err(ApiError::from)
+            .map_err(ApiError::from),
+        (None, false) => {
+            sqlx::query_as(student_select("WHERE s.admission_cancelled = false").as_str())
+                .fetch_all(pool)
+                .await
+                .map_err(ApiError::from)
+        }
     }
 }
 
-async fn load_students_by_ids(pool: &PgPool, ids: &[Uuid]) -> ApiResult<Vec<Student>> {
+async fn load_students_by_ids(
+    pool: &PgPool,
+    ids: &[Uuid],
+    include_cancelled: bool,
+) -> ApiResult<Vec<Student>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
 
-    sqlx::query_as(student_select("WHERE s.id = ANY($1)").as_str())
+    if include_cancelled {
+        sqlx::query_as(student_select("WHERE s.id = ANY($1)").as_str())
+            .bind(ids)
+            .fetch_all(pool)
+            .await
+            .map_err(ApiError::from)
+    } else {
+        sqlx::query_as(
+            student_select("WHERE s.id = ANY($1) AND s.admission_cancelled = false").as_str(),
+        )
         .bind(ids)
         .fetch_all(pool)
         .await
         .map_err(ApiError::from)
+    }
 }
 
 async fn load_student(pool: &PgPool, id: Uuid) -> ApiResult<Student> {
@@ -1548,6 +1729,16 @@ async fn load_student(pool: &PgPool, id: Uuid) -> ApiResult<Student> {
         .map_err(ApiError::from)
 }
 
+async fn load_course(pool: &PgPool, id: Uuid) -> ApiResult<Course> {
+    sqlx::query_as(
+        "SELECT id, branch_id, name, duration, duration_type FROM courses WHERE id=$1 AND active = true",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::BadRequest("Course not found".to_string()))
+}
+
 fn student_select(where_clause: &str) -> String {
     format!(
         "SELECT s.id, s.form_no, s.admission_date, s.branch_id, b.name AS branch_name, s.course_id, c.name AS course_name,
@@ -1556,7 +1747,8 @@ fn student_select(where_clause: &str) -> String {
         s.aadhar, s.address, s.student_phone, s.parent_phone,
         s.fee_year_1::float8 AS fee_year_1, s.fee_year_2::float8 AS fee_year_2, s.fee_year_3::float8 AS fee_year_3, s.fee_year_4::float8 AS fee_year_4,
         s.tuition_fee_year_1::float8 AS tuition_fee_year_1, s.tuition_fee_year_2::float8 AS tuition_fee_year_2, s.tuition_fee_year_3::float8 AS tuition_fee_year_3, s.tuition_fee_year_4::float8 AS tuition_fee_year_4,
-        s.other_fee_year_1::float8 AS other_fee_year_1, s.other_fee_year_2::float8 AS other_fee_year_2, s.other_fee_year_3::float8 AS other_fee_year_3, s.other_fee_year_4::float8 AS other_fee_year_4
+        s.other_fee_year_1::float8 AS other_fee_year_1, s.other_fee_year_2::float8 AS other_fee_year_2, s.other_fee_year_3::float8 AS other_fee_year_3, s.other_fee_year_4::float8 AS other_fee_year_4,
+        s.admission_cancelled, s.admission_cancelled_at
         FROM students s
         JOIN branches b ON b.id=s.branch_id
         JOIN courses c ON c.id=s.course_id
@@ -1574,6 +1766,7 @@ fn sync_student_select(where_clause: &str) -> String {
         s.fee_year_1::float8 AS fee_year_1, s.fee_year_2::float8 AS fee_year_2, s.fee_year_3::float8 AS fee_year_3, s.fee_year_4::float8 AS fee_year_4,
         s.tuition_fee_year_1::float8 AS tuition_fee_year_1, s.tuition_fee_year_2::float8 AS tuition_fee_year_2, s.tuition_fee_year_3::float8 AS tuition_fee_year_3, s.tuition_fee_year_4::float8 AS tuition_fee_year_4,
         s.other_fee_year_1::float8 AS other_fee_year_1, s.other_fee_year_2::float8 AS other_fee_year_2, s.other_fee_year_3::float8 AS other_fee_year_3, s.other_fee_year_4::float8 AS other_fee_year_4,
+        s.admission_cancelled, s.admission_cancelled_at,
         s.updated_at
         FROM students s
         JOIN branches b ON b.id=s.branch_id

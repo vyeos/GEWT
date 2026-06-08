@@ -65,6 +65,8 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             other_fee_year_2 REAL NOT NULL DEFAULT 0,
             other_fee_year_3 REAL NOT NULL DEFAULT 0,
             other_fee_year_4 REAL NOT NULL DEFAULT 0,
+            admission_cancelled INTEGER NOT NULL DEFAULT 0,
+            admission_cancelled_at TEXT,
             updated_at TEXT NOT NULL
         )",
     )
@@ -72,6 +74,7 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
     ensure_student_fee_split_columns(pool).await?;
     ensure_student_promotion_columns(pool).await?;
+    ensure_student_cancellation_columns(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS receipts (
@@ -203,6 +206,34 @@ async fn ensure_student_promotion_columns(pool: &SqlitePool) -> Result<(), sqlx:
     Ok(())
 }
 
+async fn ensure_student_cancellation_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let cancelled_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('students') WHERE name = 'admission_cancelled'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if cancelled_exists == 0 {
+        sqlx::query(
+            "ALTER TABLE students ADD COLUMN admission_cancelled INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    let cancelled_at_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('students') WHERE name = 'admission_cancelled_at'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if cancelled_at_exists == 0 {
+        sqlx::query("ALTER TABLE students ADD COLUMN admission_cancelled_at TEXT")
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CachedCourse {
     pub id: String,
@@ -247,6 +278,10 @@ pub struct CachedStudent {
     pub other_fee_year_2: f64,
     pub other_fee_year_3: f64,
     pub other_fee_year_4: f64,
+    #[serde(default)]
+    pub admission_cancelled: bool,
+    #[serde(default)]
+    pub admission_cancelled_at: Option<String>,
     pub updated_at: String,
 }
 
@@ -287,8 +322,8 @@ pub async fn upsert_students(
 ) -> Result<(), sqlx::Error> {
     for s in students {
         sqlx::query(
-            "INSERT OR REPLACE INTO students (id, form_no, admission_date, branch_id, branch_name, course_id, course_name, course_duration, course_duration_type, current_course_year, current_course_period, student_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone, fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)",
+            "INSERT OR REPLACE INTO students (id, form_no, admission_date, branch_id, branch_name, course_id, course_name, course_duration, course_duration_type, current_course_year, current_course_period, student_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone, fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4, admission_cancelled, admission_cancelled_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)",
         )
         .bind(&s.id).bind(&s.form_no).bind(&s.admission_date).bind(&s.branch_id).bind(&s.branch_name)
         .bind(&s.course_id).bind(&s.course_name).bind(s.course_duration).bind(&s.course_duration_type)
@@ -298,6 +333,7 @@ pub async fn upsert_students(
         .bind(s.fee_year_1).bind(s.fee_year_2).bind(s.fee_year_3).bind(s.fee_year_4)
         .bind(s.tuition_fee_year_1).bind(s.tuition_fee_year_2).bind(s.tuition_fee_year_3).bind(s.tuition_fee_year_4)
         .bind(s.other_fee_year_1).bind(s.other_fee_year_2).bind(s.other_fee_year_3).bind(s.other_fee_year_4)
+        .bind(s.admission_cancelled).bind(&s.admission_cancelled_at)
         .bind(&s.updated_at)
         .execute(pool)
         .await?;
@@ -358,10 +394,10 @@ pub async fn get_students(
              s.student_phone, s.parent_phone, s.fee_year_1, s.fee_year_2, s.fee_year_3,
              s.fee_year_4, s.tuition_fee_year_1, s.tuition_fee_year_2, s.tuition_fee_year_3,
              s.tuition_fee_year_4, s.other_fee_year_1, s.other_fee_year_2, s.other_fee_year_3,
-             s.other_fee_year_4, s.updated_at
+             s.other_fee_year_4, s.admission_cancelled, s.admission_cancelled_at, s.updated_at
              FROM students s
              LEFT JOIN courses c ON c.id = s.course_id
-             WHERE s.branch_id = $1
+             WHERE s.branch_id = $1 AND s.admission_cancelled = 0
              ORDER BY s.form_no",
         )
         .bind(bid)
@@ -377,9 +413,10 @@ pub async fn get_students(
              s.student_phone, s.parent_phone, s.fee_year_1, s.fee_year_2, s.fee_year_3,
              s.fee_year_4, s.tuition_fee_year_1, s.tuition_fee_year_2, s.tuition_fee_year_3,
              s.tuition_fee_year_4, s.other_fee_year_1, s.other_fee_year_2, s.other_fee_year_3,
-             s.other_fee_year_4, s.updated_at
+             s.other_fee_year_4, s.admission_cancelled, s.admission_cancelled_at, s.updated_at
              FROM students s
              LEFT JOIN courses c ON c.id = s.course_id
+             WHERE s.admission_cancelled = 0
              ORDER BY s.form_no",
         )
         .fetch_all(pool)
@@ -475,6 +512,8 @@ fn row_to_student(row: &sqlx::sqlite::SqliteRow) -> CachedStudent {
         other_fee_year_2: row.get("other_fee_year_2"),
         other_fee_year_3: row.get("other_fee_year_3"),
         other_fee_year_4: row.get("other_fee_year_4"),
+        admission_cancelled: row.get("admission_cancelled"),
+        admission_cancelled_at: row.get("admission_cancelled_at"),
         updated_at: row.get("updated_at"),
     }
 }

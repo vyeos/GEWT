@@ -1,0 +1,930 @@
+import { type FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  ArrowLeft,
+  Check,
+  ChevronsUpDown,
+  Save,
+  Search,
+  UserX,
+} from "lucide-react";
+import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { api } from "@/lib/api";
+import {
+  formatCoursePeriod,
+  formatCourseYear,
+  getCourseDuration,
+  getCurrentCourseYear,
+} from "@/lib/course-duration";
+import { money } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import type { Branch, Course, Me, Student } from "@/types";
+
+const categories = ["General", "SC", "ST", "OBC", "Others"];
+const genders = ["Male", "Female"];
+
+type StudentForm = {
+  form_no: string;
+  admission_date: string;
+  branch_id: string;
+  course_id: string;
+  current_course_period: number;
+  student_name: string;
+  category: string;
+  religion: string;
+  caste: string;
+  gender: string;
+  aadhar: string;
+  address: string;
+  student_phone: string;
+  parent_phone: string;
+  fee_year_1: number;
+  fee_year_2: number;
+  fee_year_3: number;
+  fee_year_4: number;
+  tuition_fee_year_1: number;
+  tuition_fee_year_2: number;
+  tuition_fee_year_3: number;
+  tuition_fee_year_4: number;
+  other_fee_year_1: number;
+  other_fee_year_2: number;
+  other_fee_year_3: number;
+  other_fee_year_4: number;
+};
+
+function toForm(student: Student): StudentForm {
+  return {
+    form_no: student.form_no,
+    admission_date: student.admission_date,
+    branch_id: student.branch_id,
+    course_id: student.course_id,
+    current_course_period: student.current_course_period ?? 1,
+    student_name: student.student_name,
+    category: student.category,
+    religion: student.religion,
+    caste: student.caste,
+    gender: student.gender,
+    aadhar: student.aadhar,
+    address: student.address,
+    student_phone: student.student_phone,
+    parent_phone: student.parent_phone,
+    fee_year_1: student.fee_year_1,
+    fee_year_2: student.fee_year_2,
+    fee_year_3: student.fee_year_3,
+    fee_year_4: student.fee_year_4,
+    tuition_fee_year_1: student.tuition_fee_year_1,
+    tuition_fee_year_2: student.tuition_fee_year_2,
+    tuition_fee_year_3: student.tuition_fee_year_3,
+    tuition_fee_year_4: student.tuition_fee_year_4,
+    other_fee_year_1: student.other_fee_year_1,
+    other_fee_year_2: student.other_fee_year_2,
+    other_fee_year_3: student.other_fee_year_3,
+    other_fee_year_4: student.other_fee_year_4,
+  };
+}
+
+function admissionYear(student: Student) {
+  return student.admission_date.slice(0, 4);
+}
+
+function feeField(type: "fee" | "tuition" | "other", year: number) {
+  return `${
+    type === "fee" ? "fee" : `${type}_fee`
+  }_year_${year}` as keyof StudentForm;
+}
+
+function numberValue(value: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+}
+
+function formatPeriodForCourse(course: Course, period: number) {
+  return `${course.duration_type === "semester" ? "Semester" : "Term"} ${period}`;
+}
+
+export function Students({
+  token,
+  me,
+  refreshKey,
+  branches,
+  courses,
+  onSaved,
+}: {
+  token: string;
+  me: Me;
+  refreshKey: number;
+  branches: Branch[];
+  courses: Course[];
+  onSaved: () => void;
+}) {
+  const [students, setStudents] = useState<Student[]>([]);
+  const [courseId, setCourseId] = useState("");
+  const [currentYearValue, setCurrentYearValue] = useState("");
+  const [courseOpen, setCourseOpen] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+  const [form, setForm] = useState<StudentForm | null>(null);
+  const [detailsCourseOpen, setDetailsCourseOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+
+  const branchCourseGroups = branches
+    .map((branch) => ({
+      branch,
+      branchCourses: courses.filter((course) => course.branch_id === branch.id),
+    }))
+    .filter((group) => group.branchCourses.length > 0);
+  const selectedCourse = courses.find((course) => course.id === courseId);
+  const selectedBranch = branches.find(
+    (branch) => branch.id === selectedCourse?.branch_id,
+  );
+  const detailsCourse = courses.find((course) => course.id === form?.course_id);
+  const detailsBranch = branches.find(
+    (branch) => branch.id === detailsCourse?.branch_id,
+  );
+  const currentYears = useMemo(
+    () =>
+      selectedCourse
+        ? Array.from(
+            { length: getCourseDuration(selectedCourse).totalYears },
+            (_, index) => String(index + 1),
+          )
+        : [],
+    [selectedCourse],
+  );
+  const canShowTable = Boolean(courseId && currentYearValue);
+  const tableStudents = useMemo(() => {
+    if (!canShowTable) return [];
+    return students.filter((student) => {
+      if (student.course_id !== courseId) return false;
+      if (
+        getCurrentCourseYear(student, me.academic_year_start_month) !==
+        Number(currentYearValue)
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [
+    canShowTable,
+    courseId,
+    currentYearValue,
+    me.academic_year_start_month,
+    students,
+  ]);
+  const visibleStudents = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return tableStudents;
+    return tableStudents.filter((student) =>
+      `${student.form_no} ${student.student_name} ${student.branch_name}`
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [search, tableStudents]);
+  const searchDisabled = !canShowTable || tableStudents.length === 0;
+  const detailPeriods = useMemo(
+    () =>
+      detailsCourse
+        ? Array.from(
+            { length: getCourseDuration(detailsCourse).totalSemesters },
+            (_, index) => index + 1,
+          )
+        : [],
+    [detailsCourse],
+  );
+  const isCancelled = selectedStudent?.admission_cancelled ?? false;
+
+  useEffect(() => {
+    async function loadStudents() {
+      try {
+        setStudents(
+          await api<Student[]>("/students?include_cancelled=true", token),
+        );
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : "Unable to load students",
+        );
+      }
+    }
+
+    if (me.role === "admin") void loadStudents();
+  }, [me.role, refreshKey, token]);
+
+  useEffect(() => {
+    if (!currentYearValue || currentYears.includes(currentYearValue)) return;
+    setCurrentYearValue("");
+  }, [currentYearValue, currentYears]);
+
+  useEffect(() => {
+    if (!selectedStudent) return;
+    const latest = students.find((student) => student.id === selectedStudent.id);
+    if (!latest) return;
+    setSelectedStudent(latest);
+    setForm(toForm(latest));
+  }, [selectedStudent?.id, students]);
+
+  function openStudent(student: Student) {
+    setSelectedStudent(student);
+    setForm(toForm(student));
+  }
+
+  function updateForm<K extends keyof StudentForm>(
+    field: K,
+    value: StudentForm[K],
+  ) {
+    setForm((current) => (current ? { ...current, [field]: value } : current));
+  }
+
+  function updateCourse(nextCourseId: string) {
+    const nextCourse = courses.find((course) => course.id === nextCourseId);
+    if (!nextCourse) return;
+    setForm((current) => {
+      if (!current) return current;
+      const maxPeriod = getCourseDuration(nextCourse).totalSemesters;
+      return {
+        ...current,
+        course_id: nextCourse.id,
+        branch_id: nextCourse.branch_id,
+        current_course_period: Math.min(
+          current.current_course_period,
+          maxPeriod,
+        ),
+      };
+    });
+  }
+
+  function updateFee(
+    year: number,
+    type: "fee" | "tuition" | "other",
+    value: string,
+  ) {
+    const field = feeField(type, year);
+    updateForm(field, numberValue(value));
+  }
+
+  function feeTotalValid(year: number) {
+    if (!form) return true;
+    const fee = Number(form[feeField("fee", year)]);
+    const tuition = Number(form[feeField("tuition", year)]);
+    const other = Number(form[feeField("other", year)]);
+    return Math.abs(tuition + other - fee) <= 0.01;
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedStudent || !form) return;
+    for (let year = 1; year <= 4; year += 1) {
+      if (!feeTotalValid(year)) {
+        toast.error(`Tuition fee and other fee must add up to year ${year} fee`);
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      const saved = await api<Student>(`/students/${selectedStudent.id}`, token, {
+        method: "PATCH",
+        body: JSON.stringify(form),
+      });
+      setStudents((current) =>
+        current.map((student) => (student.id === saved.id ? saved : student)),
+      );
+      setSelectedStudent(saved);
+      setForm(toForm(saved));
+      toast.success(`Updated Student #${saved.form_no}`);
+      onSaved();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function confirmCancelAdmission() {
+    if (!selectedStudent) return;
+    setCancelling(true);
+    try {
+      const saved = await api<Student>(
+        `/students/${selectedStudent.id}/cancel`,
+        token,
+        { method: "POST" },
+      );
+      setStudents((current) =>
+        current.map((student) => (student.id === saved.id ? saved : student)),
+      );
+      setSelectedStudent(saved);
+      setForm(toForm(saved));
+      setCancelOpen(false);
+      toast.success(`Cancelled admission #${saved.form_no}`);
+      onSaved();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Unable to cancel admission",
+      );
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  if (me.role !== "admin") {
+    return (
+      <Card>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Students management is available to administrators only.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (selectedStudent && form) {
+    return (
+      <form onSubmit={submit} className="flex flex-col gap-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setSelectedStudent(null);
+              setForm(null);
+            }}
+          >
+            <ArrowLeft className="size-4" />
+            Back
+          </Button>
+          <div className="flex items-center gap-2">
+            {isCancelled && <Badge variant="destructive">Cancelled</Badge>}
+            <Button type="submit" disabled={saving}>
+              <Save className="size-4" />
+              {saving ? "Saving..." : "Save changes"}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={isCancelled || cancelling}
+              onClick={() => setCancelOpen(true)}
+            >
+              <UserX className="size-4" />
+              Cancel admission
+            </Button>
+          </div>
+        </div>
+
+        <Card>
+          <CardContent className="flex flex-col gap-5">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="flex flex-col gap-2">
+                <Label>Form No.</Label>
+                <Input
+                  required
+                  value={form.form_no}
+                  onChange={(e) => updateForm("form_no", e.currentTarget.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Admission date</Label>
+                <Input
+                  type="date"
+                  value={form.admission_date}
+                  onChange={(e) =>
+                    updateForm("admission_date", e.currentTarget.value)
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2 lg:col-span-2">
+                <Label>Course</Label>
+                <Popover
+                  open={detailsCourseOpen}
+                  onOpenChange={setDetailsCourseOpen}
+                >
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={detailsCourseOpen}
+                      className="w-full justify-between font-normal"
+                    >
+                      {detailsCourse ? (
+                        <span className="truncate">
+                          {detailsCourse.name}
+                          <span className="ml-1.5 text-muted-foreground">
+                            ({detailsBranch?.name})
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">
+                          Select course
+                        </span>
+                      )}
+                      <ChevronsUpDown className="ml-auto size-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    className="w-auto min-w-[var(--radix-popover-trigger-width)] p-0"
+                    align="start"
+                  >
+                    <CourseGroups
+                      groups={branchCourseGroups}
+                      selectedCourseId={form.course_id}
+                      onSelect={(nextCourseId) => {
+                        updateCourse(nextCourseId);
+                        setDetailsCourseOpen(false);
+                      }}
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="flex flex-col gap-2">
+                <Label>Current period</Label>
+                <Select
+                  value={String(form.current_course_period)}
+                  onValueChange={(value) =>
+                    updateForm("current_course_period", Number(value))
+                  }
+                  disabled={detailPeriods.length === 0}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {detailPeriods.map((period) => (
+                        <SelectItem key={period} value={String(period)}>
+                          {detailsCourse
+                            ? formatPeriodForCourse(detailsCourse, period)
+                            : period}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Current year</Label>
+                <Input
+                  disabled
+                  value={formatCourseYear(
+                    Math.max(Math.ceil(form.current_course_period / 2), 1),
+                  )}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Branch</Label>
+                <Input disabled value={detailsBranch?.name ?? ""} />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Status</Label>
+                <Input
+                  disabled
+                  value={
+                    selectedStudent.admission_cancelled_at
+                      ? `Cancelled on ${selectedStudent.admission_cancelled_at.slice(0, 10)}`
+                      : "Active"
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="flex flex-col gap-2 sm:col-span-2">
+                <Label>Student name</Label>
+                <Input
+                  required
+                  value={form.student_name}
+                  onChange={(e) =>
+                    updateForm("student_name", e.currentTarget.value)
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Category</Label>
+                <Select
+                  value={form.category}
+                  onValueChange={(value) => updateForm("category", value)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {categories.map((category) => (
+                        <SelectItem key={category} value={category}>
+                          {category}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Gender</Label>
+                <Select
+                  value={form.gender}
+                  onValueChange={(value) => updateForm("gender", value)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {genders.map((gender) => (
+                        <SelectItem key={gender} value={gender}>
+                          {gender}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="flex flex-col gap-2">
+                <Label>Religion</Label>
+                <Input
+                  value={form.religion}
+                  onChange={(e) => updateForm("religion", e.currentTarget.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Caste</Label>
+                <Input
+                  value={form.caste}
+                  onChange={(e) => updateForm("caste", e.currentTarget.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Aadhar No.</Label>
+                <Input
+                  value={form.aadhar}
+                  onChange={(e) => updateForm("aadhar", e.currentTarget.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Admission year</Label>
+                <Input disabled value={admissionYear(selectedStudent)} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <Label>Student Phone</Label>
+                <Input
+                  value={form.student_phone}
+                  onChange={(e) =>
+                    updateForm("student_phone", e.currentTarget.value)
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Parent Phone</Label>
+                <Input
+                  value={form.parent_phone}
+                  onChange={(e) =>
+                    updateForm("parent_phone", e.currentTarget.value)
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label>Address</Label>
+              <Textarea
+                value={form.address}
+                onChange={(e) => updateForm("address", e.currentTarget.value)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="p-0">
+          <CardContent className="p-0">
+            <Table className="min-w-[900px] table-fixed">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-24">Year</TableHead>
+                  <TableHead className="text-right">Yearly fee</TableHead>
+                  <TableHead className="text-right">Tuition fee</TableHead>
+                  <TableHead className="text-right">Other fee</TableHead>
+                  <TableHead className="w-40 text-right">Check</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {[1, 2, 3, 4].map((year) => {
+                  const total = Number(form[feeField("fee", year)]);
+                  const valid = feeTotalValid(year);
+                  return (
+                    <TableRow key={year}>
+                      <TableCell className="font-medium">
+                        {formatCourseYear(year)}
+                      </TableCell>
+                      {(["fee", "tuition", "other"] as const).map((type) => (
+                        <TableCell key={type}>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            disabled={isCancelled}
+                            value={Number(form[feeField(type, year)])}
+                            onChange={(e) =>
+                              updateFee(year, type, e.currentTarget.value)
+                            }
+                            className="text-right"
+                          />
+                        </TableCell>
+                      ))}
+                      <TableCell
+                        className={cn(
+                          "text-right text-sm",
+                          valid ? "text-muted-foreground" : "text-destructive",
+                        )}
+                      >
+                        {valid ? money(total) : "Split mismatch"}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+
+        <AlertDialog open={cancelOpen} onOpenChange={setCancelOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Cancel Admission</AlertDialogTitle>
+              <AlertDialogDescription>
+                Cancel admission for {selectedStudent.student_name}? This sets
+                all fee amounts to 0 and removes the student from outstanding,
+                promotion, and fee receipt student lists.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={cancelling}>Back</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                disabled={cancelling}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void confirmCancelAdmission();
+                }}
+              >
+                {cancelling ? "Cancelling..." : "Cancel admission"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </form>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <Card>
+        <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_12rem]">
+          <div className="flex flex-col gap-2">
+            <Label>Course</Label>
+            <Popover open={courseOpen} onOpenChange={setCourseOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={courseOpen}
+                  className="w-full justify-between font-normal"
+                >
+                  {selectedCourse ? (
+                    <span className="truncate">
+                      {selectedCourse.name}
+                      <span className="ml-1.5 text-muted-foreground">
+                        ({selectedBranch?.name})
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">Select course</span>
+                  )}
+                  <ChevronsUpDown className="ml-auto size-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                className="w-auto min-w-[var(--radix-popover-trigger-width)] p-0"
+                align="start"
+              >
+                <CourseGroups
+                  groups={branchCourseGroups}
+                  selectedCourseId={courseId}
+                  onSelect={(nextCourseId) => {
+                    setCourseId(nextCourseId);
+                    setCurrentYearValue("");
+                    setCourseOpen(false);
+                  }}
+                />
+              </PopoverContent>
+            </Popover>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label>Current Year</Label>
+            <Select
+              value={currentYearValue}
+              onValueChange={setCurrentYearValue}
+              disabled={!courseId}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Select year" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {currentYears.length === 0 ? (
+                    <div className="px-2 py-6 text-center text-sm text-muted-foreground">
+                      No results found
+                    </div>
+                  ) : (
+                    currentYears.map((year) => (
+                      <SelectItem key={year} value={year}>
+                        {formatCourseYear(Number(year))}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="gap-0 p-0">
+        <CardHeader className="border-b p-4">
+          <div className="flex w-full max-w-sm flex-col gap-2">
+            <Label>Search</Label>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.currentTarget.value)}
+                className="pl-8"
+                placeholder="Form or name"
+                disabled={searchDisabled}
+              />
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {!canShowTable ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">
+              Select course and current year to view students
+            </p>
+          ) : visibleStudents.length === 0 ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">
+              No students found
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Form</TableHead>
+                  <TableHead>Student</TableHead>
+                  <TableHead>Branch</TableHead>
+                  <TableHead>Course</TableHead>
+                  <TableHead>Current Period</TableHead>
+                  <TableHead>Admission Year</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visibleStudents.map((student) => (
+                  <TableRow
+                    key={student.id}
+                    className="cursor-pointer transition-colors hover:bg-muted/60"
+                    onClick={() => openStudent(student)}
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        openStudent(student);
+                      }
+                    }}
+                  >
+                    <TableCell>{student.form_no}</TableCell>
+                    <TableCell className="font-medium">
+                      {student.student_name}
+                    </TableCell>
+                    <TableCell>{student.branch_name}</TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{student.course_name}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      {formatCoursePeriod(
+                        student,
+                        student.current_course_period ?? 1,
+                      )}
+                    </TableCell>
+                    <TableCell>{admissionYear(student)}</TableCell>
+                    <TableCell>
+                      {student.admission_cancelled ? (
+                        <Badge variant="destructive">Cancelled</Badge>
+                      ) : (
+                        <Badge variant="outline">Active</Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function CourseGroups({
+  groups,
+  selectedCourseId,
+  onSelect,
+}: {
+  groups: { branch: Branch; branchCourses: Course[] }[];
+  selectedCourseId: string;
+  onSelect: (courseId: string) => void;
+}) {
+  if (groups.length === 0) {
+    return (
+      <div className="px-2 py-6 text-center text-sm text-muted-foreground">
+        No results found
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex divide-x">
+      {groups.map(({ branch, branchCourses }) => (
+        <div key={branch.id} className="min-w-40 flex-1 p-1">
+          <div className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground">
+            {branch.name}
+          </div>
+          {branchCourses.map((course) => (
+            <button
+              key={course.id}
+              type="button"
+              className={cn(
+                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent",
+                selectedCourseId === course.id && "bg-accent",
+              )}
+              onClick={() => onSelect(course.id)}
+            >
+              <Check
+                className={cn(
+                  "size-4 shrink-0",
+                  selectedCourseId === course.id ? "opacity-100" : "opacity-0",
+                )}
+              />
+              <span className="truncate">{course.name}</span>
+            </button>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}

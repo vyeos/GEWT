@@ -8,6 +8,7 @@ import { Login } from "@/features/login/Login";
 import { Outstanding } from "@/features/outstanding/Outstanding";
 import { Promote } from "@/features/promote/Promote";
 import { Receipt } from "@/features/receipt/Receipt";
+import { Students } from "@/features/students/Students";
 import { Utility } from "@/features/utility/Utility";
 import { api, ApiRequestError } from "@/lib/api";
 import { syncAll } from "@/lib/cache";
@@ -215,6 +216,16 @@ function App() {
           refreshKey={screenRefreshKey}
           branches={branches}
           courses={courses}
+        />
+      )}
+      {screen === "students" && (
+        <Students
+          token={token}
+          me={me}
+          refreshKey={screenRefreshKey}
+          branches={branches}
+          courses={courses}
+          onSaved={() => void refreshCurrentScreen()}
         />
       )}
       {screen === "utility" && (

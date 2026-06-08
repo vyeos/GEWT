@@ -5,6 +5,7 @@ export type Screen =
   | "receipt"
   | "promote"
   | "outstanding"
+  | "students"
   | "utility";
 
 export type PaymentMode = "Cash" | "UPI" | "DD" | "Cheque" | "NEFT" | "RTGS";
@@ -65,6 +66,8 @@ export type Student = {
   other_fee_year_2: number;
   other_fee_year_3: number;
   other_fee_year_4: number;
+  admission_cancelled: boolean;
+  admission_cancelled_at: string | null;
 };
 
 export type OutstandingFeeBreakdown = {
