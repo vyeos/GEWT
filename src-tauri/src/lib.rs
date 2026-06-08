@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 use tauri::Manager;
+use tauri_plugin_updater::UpdaterExt;
 use tokio::sync::RwLock;
 
 const API_BASE: &str = "http://localhost:45123";
@@ -594,6 +595,49 @@ async fn is_api_ready(api_base: &str) -> bool {
         .is_ok_and(|response| response.status().is_success())
 }
 
+async fn install_startup_update<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
+    if cfg!(debug_assertions) {
+        return false;
+    }
+
+    let updater = match app
+        .updater_builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(updater) => updater,
+        Err(error) => {
+            eprintln!("GEWT update check could not be prepared: {error}");
+            return false;
+        }
+    };
+
+    let update = match updater.check().await {
+        Ok(update) => update,
+        Err(error) => {
+            eprintln!("GEWT update check failed: {error}");
+            return false;
+        }
+    };
+
+    let Some(update) = update else {
+        return false;
+    };
+
+    eprintln!(
+        "GEWT update {} is available. Installing before API startup.",
+        update.version
+    );
+
+    match update.download_and_install(|_, _| {}, || {}).await {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("GEWT update install failed: {error}");
+            false
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -601,6 +645,13 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            let update_installed = tauri::async_runtime::block_on(async {
+                install_startup_update(app.handle()).await
+            });
+            if update_installed {
+                app.handle().restart();
+            }
+
             let config_dir = app.path().app_config_dir()?;
             std::fs::create_dir_all(&config_dir)?;
             let env_file = config_dir.join(".env");
