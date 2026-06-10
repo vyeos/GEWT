@@ -101,6 +101,7 @@ struct Course {
     name: String,
     duration: i32,
     duration_type: String,
+    letterhead: Option<String>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -287,6 +288,7 @@ struct CourseRequest {
     name: String,
     duration: i32,
     duration_type: String,
+    letterhead: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -319,6 +321,7 @@ struct SyncCourse {
     name: String,
     duration: i32,
     duration_type: String,
+    letterhead: Option<String>,
     updated_at: chrono::DateTime<Utc>,
 }
 
@@ -529,11 +532,11 @@ async fn courses(
 ) -> ApiResult<Json<Vec<Course>>> {
     let auth = claims(&state, &headers)?;
     let rows = if auth.role == "admin" {
-        sqlx::query_as("SELECT id, branch_id, name, duration, duration_type FROM courses WHERE active = true ORDER BY name")
+        sqlx::query_as("SELECT id, branch_id, name, duration, duration_type, letterhead FROM courses WHERE active = true ORDER BY name")
             .fetch_all(&state.pool)
             .await?
     } else {
-        sqlx::query_as("SELECT id, branch_id, name, duration, duration_type FROM courses WHERE active = true AND branch_id = $1 ORDER BY name")
+        sqlx::query_as("SELECT id, branch_id, name, duration, duration_type, letterhead FROM courses WHERE active = true AND branch_id = $1 ORDER BY name")
             .bind(auth.branch_id.ok_or(ApiError::Forbidden)?)
             .fetch_all(&state.pool)
             .await?
@@ -548,13 +551,14 @@ async fn create_course(
 ) -> ApiResult<Json<Course>> {
     require_admin(&state, &headers)?;
     let row = sqlx::query_as(
-        "INSERT INTO courses (branch_id, name, duration, duration_type) VALUES ($1, $2, $3, $4)
-         RETURNING id, branch_id, name, duration, duration_type",
+        "INSERT INTO courses (branch_id, name, duration, duration_type, letterhead) VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, branch_id, name, duration, duration_type, letterhead",
     )
     .bind(req.branch_id)
     .bind(req.name)
     .bind(req.duration)
     .bind(req.duration_type)
+    .bind(req.letterhead)
     .fetch_one(&state.pool)
     .await?;
     Ok(Json(row))
@@ -569,14 +573,15 @@ async fn update_course(
     require_admin(&state, &headers)?;
     let row = sqlx::query_as(
         "UPDATE courses
-         SET branch_id = $1, name = $2, duration = $3, duration_type = $4, updated_at = now()
-         WHERE id = $5 AND active = true
-         RETURNING id, branch_id, name, duration, duration_type",
+         SET branch_id = $1, name = $2, duration = $3, duration_type = $4, letterhead = $5, updated_at = now()
+         WHERE id = $6 AND active = true
+         RETURNING id, branch_id, name, duration, duration_type, letterhead",
     )
     .bind(req.branch_id)
     .bind(req.name)
     .bind(req.duration)
     .bind(req.duration_type)
+    .bind(req.letterhead)
     .bind(id)
     .fetch_one(&state.pool)
     .await?;
@@ -794,7 +799,7 @@ async fn promote_students(
     }
 
     let course: Course = sqlx::query_as(
-        "SELECT id, branch_id, name, duration, duration_type FROM courses WHERE id=$1 AND active = true",
+        "SELECT id, branch_id, name, duration, duration_type, letterhead FROM courses WHERE id=$1 AND active = true",
     )
     .bind(req.course_id)
     .fetch_optional(&state.pool)
@@ -1063,42 +1068,42 @@ async fn sync_courses(
 
     let rows: Vec<SyncCourse> = match (branch_filter, since_ts, cursor) {
         (Some(bid), Some(since), Some((cursor_ts, cursor_id))) => sqlx::query_as(
-            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND branch_id = $1 AND updated_at > $2 AND updated_at <= $3 AND (updated_at, id) > ($4, $5) ORDER BY updated_at ASC, id ASC LIMIT $6"
+            "SELECT id, branch_id, name, duration, duration_type, letterhead, updated_at FROM courses WHERE active = true AND branch_id = $1 AND updated_at > $2 AND updated_at <= $3 AND (updated_at, id) > ($4, $5) ORDER BY updated_at ASC, id ASC LIMIT $6"
         )
         .bind(bid).bind(since).bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
         .fetch_all(&state.pool).await?,
         (Some(bid), Some(since), None) => sqlx::query_as(
-            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND branch_id = $1 AND updated_at > $2 AND updated_at <= $3 ORDER BY updated_at ASC, id ASC LIMIT $4"
+            "SELECT id, branch_id, name, duration, duration_type, letterhead, updated_at FROM courses WHERE active = true AND branch_id = $1 AND updated_at > $2 AND updated_at <= $3 ORDER BY updated_at ASC, id ASC LIMIT $4"
         )
         .bind(bid).bind(since).bind(server_time).bind(limit + 1)
         .fetch_all(&state.pool).await?,
         (Some(bid), None, Some((cursor_ts, cursor_id))) => sqlx::query_as(
-            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND branch_id = $1 AND updated_at <= $2 AND (updated_at, id) > ($3, $4) ORDER BY updated_at ASC, id ASC LIMIT $5"
+            "SELECT id, branch_id, name, duration, duration_type, letterhead, updated_at FROM courses WHERE active = true AND branch_id = $1 AND updated_at <= $2 AND (updated_at, id) > ($3, $4) ORDER BY updated_at ASC, id ASC LIMIT $5"
         )
         .bind(bid).bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
         .fetch_all(&state.pool).await?,
         (Some(bid), None, None) => sqlx::query_as(
-            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND branch_id = $1 AND updated_at <= $2 ORDER BY updated_at ASC, id ASC LIMIT $3"
+            "SELECT id, branch_id, name, duration, duration_type, letterhead, updated_at FROM courses WHERE active = true AND branch_id = $1 AND updated_at <= $2 ORDER BY updated_at ASC, id ASC LIMIT $3"
         )
         .bind(bid).bind(server_time).bind(limit + 1)
         .fetch_all(&state.pool).await?,
         (None, Some(since), Some((cursor_ts, cursor_id))) => sqlx::query_as(
-            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND updated_at > $1 AND updated_at <= $2 AND (updated_at, id) > ($3, $4) ORDER BY updated_at ASC, id ASC LIMIT $5"
+            "SELECT id, branch_id, name, duration, duration_type, letterhead, updated_at FROM courses WHERE active = true AND updated_at > $1 AND updated_at <= $2 AND (updated_at, id) > ($3, $4) ORDER BY updated_at ASC, id ASC LIMIT $5"
         )
         .bind(since).bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
         .fetch_all(&state.pool).await?,
         (None, Some(since), None) => sqlx::query_as(
-            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND updated_at > $1 AND updated_at <= $2 ORDER BY updated_at ASC, id ASC LIMIT $3"
+            "SELECT id, branch_id, name, duration, duration_type, letterhead, updated_at FROM courses WHERE active = true AND updated_at > $1 AND updated_at <= $2 ORDER BY updated_at ASC, id ASC LIMIT $3"
         )
         .bind(since).bind(server_time).bind(limit + 1)
         .fetch_all(&state.pool).await?,
         (None, None, Some((cursor_ts, cursor_id))) => sqlx::query_as(
-            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND updated_at <= $1 AND (updated_at, id) > ($2, $3) ORDER BY updated_at ASC, id ASC LIMIT $4"
+            "SELECT id, branch_id, name, duration, duration_type, letterhead, updated_at FROM courses WHERE active = true AND updated_at <= $1 AND (updated_at, id) > ($2, $3) ORDER BY updated_at ASC, id ASC LIMIT $4"
         )
         .bind(server_time).bind(cursor_ts).bind(cursor_id).bind(limit + 1)
         .fetch_all(&state.pool).await?,
         (None, None, None) => sqlx::query_as(
-            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE active = true AND updated_at <= $1 ORDER BY updated_at ASC, id ASC LIMIT $2"
+            "SELECT id, branch_id, name, duration, duration_type, letterhead, updated_at FROM courses WHERE active = true AND updated_at <= $1 ORDER BY updated_at ASC, id ASC LIMIT $2"
         )
         .bind(server_time).bind(limit + 1)
         .fetch_all(&state.pool).await?,
@@ -1731,7 +1736,7 @@ async fn load_student(pool: &PgPool, id: Uuid) -> ApiResult<Student> {
 
 async fn load_course(pool: &PgPool, id: Uuid) -> ApiResult<Course> {
     sqlx::query_as(
-        "SELECT id, branch_id, name, duration, duration_type FROM courses WHERE id=$1 AND active = true",
+        "SELECT id, branch_id, name, duration, duration_type, letterhead FROM courses WHERE id=$1 AND active = true",
     )
     .bind(id)
     .fetch_optional(pool)

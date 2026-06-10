@@ -192,10 +192,12 @@
   }
 }
 
-/* The receipt print template lives in the DOM at all times but is only
-   visible to the printer. On screen it is hidden; when printing, every
-   other element is hidden and only #receipt-print is shown. */
-#receipt-print {
+/* The print templates live in the DOM at all times but are only visible to the
+   printer. On screen they are hidden; when printing, every other element is
+   hidden and only the populated template (#receipt-print or #admission-print)
+   is shown. Only one is ever populated at a time. */
+#receipt-print,
+#admission-print {
   display: none;
 }
 
@@ -204,10 +206,13 @@
     visibility: hidden;
   }
   #receipt-print,
-  #receipt-print * {
+  #receipt-print *,
+  #admission-print,
+  #admission-print * {
     visibility: visible;
   }
-  #receipt-print {
+  #receipt-print,
+  #admission-print {
     display: block;
     position: absolute;
     left: 0;

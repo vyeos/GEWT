@@ -50,13 +50,19 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
+import { fetchLetterheads, letterheadSrc } from "@/lib/letterhead";
 import type { Branch, Course, Me, User } from "@/types";
+
+// Radix Select items can't use an empty string value, so "none" is the sentinel
+// for "no letterhead mapped".
+const NO_LETTERHEAD = "none";
 
 type CourseForm = {
   branch_id: string;
   name: string;
   duration: number;
   duration_type: Course["duration_type"];
+  letterhead: string;
 };
 
 type UserForm = {
@@ -73,6 +79,7 @@ function newCourse(branches: Branch[]): CourseForm {
     name: "",
     duration: 1,
     duration_type: "year",
+    letterhead: "",
   };
 }
 
@@ -107,6 +114,7 @@ export function Utility({
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [course, setCourse] = useState<CourseForm>(() => newCourse(branches));
+  const [letterheads, setLetterheads] = useState<string[]>([]);
   const [userForm, setUserForm] = useState<UserForm>(() => newUser());
   const [userSearch, setUserSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<"all" | User["role"]>("all");
@@ -149,6 +157,10 @@ export function Utility({
 
     void loadUsers();
   }, [me.role, token, refreshKey]);
+
+  useEffect(() => {
+    void fetchLetterheads().then(setLetterheads);
+  }, []);
 
   if (me.role !== "admin") {
     return (
@@ -194,6 +206,7 @@ export function Utility({
       name: item.name,
       duration: item.duration,
       duration_type: item.duration_type,
+      letterhead: item.letterhead ?? "",
     });
     setCourseDialogOpen(true);
   }
@@ -215,7 +228,10 @@ export function Utility({
     const path = editingCourseId ? `/courses/${editingCourseId}` : "/courses";
     await api(path, token, {
       method: editingCourseId ? "PATCH" : "POST",
-      body: JSON.stringify(course),
+      body: JSON.stringify({
+        ...course,
+        letterhead: course.letterhead || null,
+      }),
     });
     toast.success(editingCourseId ? "Course updated" : "Course saved");
     resetCourseForm();
@@ -432,6 +448,45 @@ export function Utility({
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Letterhead</Label>
+                <Select
+                  value={course.letterhead || NO_LETTERHEAD}
+                  onValueChange={(value) =>
+                    setCourse({
+                      ...course,
+                      letterhead: value === NO_LETTERHEAD ? "" : value,
+                    })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value={NO_LETTERHEAD}>None</SelectItem>
+                      {letterheads.map((file) => (
+                        <SelectItem key={file} value={file}>
+                          {file}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                {letterheads.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Drop letterhead images into public/letterheads/, then restart
+                    the app.
+                  </p>
+                )}
+                {course.letterhead && (
+                  <img
+                    src={letterheadSrc(course.letterhead)}
+                    alt="Letterhead preview"
+                    className="mt-1 max-h-40 w-full rounded-md border object-contain"
+                  />
+                )}
               </div>
               <DialogFooter className="pt-2">
                 <Button

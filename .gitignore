@@ -13,6 +13,9 @@ dist-ssr
 *.local
 api/.env
 
+# Generated at build time by the letterhead-manifest Vite plugin
+public/letterheads/manifest.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

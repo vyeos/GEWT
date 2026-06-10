@@ -1,5 +1,11 @@
-import { type FormEvent, useEffect, useState } from "react";
-import { Check, ChevronsUpDown, RotateCcw, UserPlus } from "lucide-react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
+import {
+  Check,
+  ChevronsUpDown,
+  Printer,
+  RotateCcw,
+  UserPlus,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,8 +29,10 @@ import { api } from "@/lib/api";
 import { cacheStudent } from "@/lib/cache";
 import { getCourseDuration } from "@/lib/course-duration";
 import { money, today } from "@/lib/format";
+import { letterheadSrc } from "@/lib/letterhead";
 import { cn } from "@/lib/utils";
 import type { Branch, Course, Me, Student } from "@/types";
+import { AdmissionPrint, type PrintableAdmission } from "./AdmissionPrint";
 
 const categories = ["General", "SC", "ST", "OBC", "Others"];
 
@@ -68,8 +76,20 @@ export function Admission({
   const [form, setForm] = useState(initialForm);
   const [generatedFormNo, setGeneratedFormNo] = useState("");
   const [courseOpen, setCourseOpen] = useState(false);
+  const [printSnapshot, setPrintSnapshot] = useState<PrintableAdmission | null>(
+    null,
+  );
+  const [printCourse, setPrintCourse] = useState<Course | undefined>(undefined);
+  const [printBranch, setPrintBranch] = useState<Branch | undefined>(undefined);
+  // Set by the "Save & print" button so the shared submit handler knows whether
+  // to open the print dialog after a successful save.
+  const shouldPrintRef = useRef(false);
+  const printAfterRenderRef = useRef(false);
   const selectedCourse = courses.find(
     (course) => course.id === form.course_id,
+  );
+  const selectedBranch = branches.find(
+    (branch) => branch.id === selectedCourse?.branch_id,
   );
   const durationValue = selectedCourse
     ? getCourseDuration(selectedCourse).label
@@ -101,8 +121,29 @@ export function Admission({
     void loadNextFormNo();
   }, [token]);
 
+  // Wait for the letterhead image to load, then open the print dialog. Mirrors
+  // the receipt print flow: the webview prints whatever is in #admission-print.
+  useEffect(() => {
+    if (!printSnapshot || !printAfterRenderRef.current) return;
+    printAfterRenderRef.current = false;
+    const img = document.querySelector<HTMLImageElement>("#admission-print img");
+    if (img && !img.complete) {
+      const done = () => {
+        img.removeEventListener("load", done);
+        img.removeEventListener("error", done);
+        window.print();
+      };
+      img.addEventListener("load", done);
+      img.addEventListener("error", done);
+      return;
+    }
+    requestAnimationFrame(() => window.print());
+  }, [printSnapshot]);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
+    const print = shouldPrintRef.current;
+    shouldPrintRef.current = false;
     try {
       const {
         yearly_fee,
@@ -142,6 +183,29 @@ export function Admission({
       });
       cacheStudent(savedStudent).catch(() => {});
       toast.success(`Admitted Student #${savedStudent.form_no}`);
+      if (print) {
+        setPrintCourse(selectedCourse);
+        setPrintBranch(selectedBranch);
+        setPrintSnapshot({
+          form_no: form.form_no,
+          admission_date: form.admission_date,
+          surname,
+          student_name,
+          father_name,
+          category: form.category,
+          religion: form.religion,
+          caste: form.caste,
+          gender: form.gender,
+          aadhar: form.aadhar,
+          address: form.address,
+          student_phone: form.student_phone,
+          parent_phone: form.parent_phone,
+          yearly_fee,
+          tuition_fee,
+          other_fee,
+        });
+        printAfterRenderRef.current = true;
+      }
       setForm(initialForm());
       setGeneratedFormNo("");
       void loadNextFormNo();
@@ -314,6 +378,17 @@ export function Admission({
               <Input value={durationValue} disabled />
             </div>
           </div>
+
+          {selectedCourse?.letterhead && (
+            <div className="flex flex-col gap-2">
+              <Label>Letterhead</Label>
+              <img
+                src={letterheadSrc(selectedCourse.letterhead)}
+                alt="Letterhead preview"
+                className="max-h-40 w-full rounded-md border object-contain"
+              />
+            </div>
+          )}
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="flex flex-col gap-2">
@@ -501,14 +576,35 @@ export function Admission({
             />
           </div>
 
-          <div className="flex justify-end">
-            <Button>
+          <div className="flex justify-end gap-2">
+            <Button
+              type="submit"
+              variant="outline"
+              onClick={() => {
+                shouldPrintRef.current = false;
+              }}
+            >
               <UserPlus className="size-4" />
               Save admission
+            </Button>
+            <Button
+              type="submit"
+              onClick={() => {
+                shouldPrintRef.current = true;
+              }}
+            >
+              <Printer className="size-4" />
+              Save & print
             </Button>
           </div>
         </CardContent>
       </Card>
+
+      <AdmissionPrint
+        admission={printSnapshot}
+        course={printCourse}
+        branch={printBranch}
+      />
     </form>
   );
 }

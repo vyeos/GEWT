@@ -18,6 +18,7 @@ export type Course = {
   name: string;
   duration: number;
   duration_type: "year" | "semester";
+  letterhead: string | null;
 };
 
 export type User = {

@@ -50,6 +50,7 @@ import {
   getCurrentCourseYear,
 } from "@/lib/course-duration";
 import { money, today } from "@/lib/format";
+import { letterheadSrc } from "@/lib/letterhead";
 import { cn } from "@/lib/utils";
 import type { Branch, Course, Me, PaymentMode, Student } from "@/types";
 import { ReceiptPrint, type PrintableReceipt } from "./ReceiptPrint";
@@ -130,6 +131,12 @@ export function Receipt({
   const selectedBranch = branches.find(
     (branch) => branch.id === selectedStudent?.branch_id,
   );
+  // The receipt prints on the student's actual course letterhead; before a
+  // student is picked, fall back to the course filter selection for the preview.
+  const selectedStudentCourse = courses.find(
+    (course) => course.id === selectedStudent?.course_id,
+  );
+  const previewCourse = selectedStudentCourse ?? selectedCourse;
   const availableYears = useMemo(() => {
     const years = new Set<number>();
     for (const student of students) {
@@ -736,6 +743,17 @@ export function Receipt({
               </div>
             </div>
 
+            {previewCourse?.letterhead && (
+              <div className="flex flex-col gap-2">
+                <Label>Letterhead</Label>
+                <img
+                  src={letterheadSrc(previewCourse.letterhead)}
+                  alt="Letterhead preview"
+                  className="max-h-40 w-full rounded-md border object-contain"
+                />
+              </div>
+            )}
+
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
               <div className="flex flex-col gap-2">
                 <Label>Fee type</Label>
@@ -933,6 +951,7 @@ export function Receipt({
       <ReceiptPrint
         student={selectedStudent}
         branch={selectedBranch}
+        course={selectedStudentCourse}
         receipt={printReceipt}
         academicYearStartMonth={me.academic_year_start_month}
       />

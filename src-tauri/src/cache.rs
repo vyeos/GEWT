@@ -25,11 +25,18 @@ async fn create_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             name TEXT NOT NULL,
             duration INTEGER NOT NULL,
             duration_type TEXT NOT NULL,
+            letterhead TEXT,
             updated_at TEXT NOT NULL
         )",
     )
     .execute(pool)
     .await?;
+
+    // Existing caches predate the letterhead column; add it idempotently.
+    // SQLite has no "ADD COLUMN IF NOT EXISTS", so ignore the duplicate error.
+    let _ = sqlx::query("ALTER TABLE courses ADD COLUMN letterhead TEXT")
+        .execute(pool)
+        .await;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS students (
@@ -241,6 +248,7 @@ pub struct CachedCourse {
     pub name: String,
     pub duration: i32,
     pub duration_type: String,
+    pub letterhead: Option<String>,
     pub updated_at: String,
 }
 
@@ -305,11 +313,11 @@ pub async fn upsert_courses(
 ) -> Result<(), sqlx::Error> {
     for c in courses {
         sqlx::query(
-            "INSERT OR REPLACE INTO courses (id, branch_id, name, duration, duration_type, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT OR REPLACE INTO courses (id, branch_id, name, duration, duration_type, letterhead, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(&c.id).bind(&c.branch_id).bind(&c.name).bind(c.duration)
-        .bind(&c.duration_type).bind(&c.updated_at)
+        .bind(&c.duration_type).bind(&c.letterhead).bind(&c.updated_at)
         .execute(pool)
         .await?;
     }
@@ -365,14 +373,14 @@ pub async fn get_courses(
 ) -> Result<Vec<CachedCourse>, sqlx::Error> {
     let rows = if let Some(bid) = branch_id {
         sqlx::query(
-            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses WHERE branch_id = $1 ORDER BY name",
+            "SELECT id, branch_id, name, duration, duration_type, letterhead, updated_at FROM courses WHERE branch_id = $1 ORDER BY name",
         )
         .bind(bid)
         .fetch_all(pool)
         .await?
     } else {
         sqlx::query(
-            "SELECT id, branch_id, name, duration, duration_type, updated_at FROM courses ORDER BY name",
+            "SELECT id, branch_id, name, duration, duration_type, letterhead, updated_at FROM courses ORDER BY name",
         )
         .fetch_all(pool)
         .await?
@@ -474,6 +482,7 @@ fn row_to_course(row: &sqlx::sqlite::SqliteRow) -> CachedCourse {
         name: row.get("name"),
         duration: row.get("duration"),
         duration_type: row.get("duration_type"),
+        letterhead: row.get("letterhead"),
         updated_at: row.get("updated_at"),
     }
 }

@@ -1,6 +1,7 @@
 import { amountInWords, money } from "@/lib/format";
 import { formatCourseYear, getCurrentCourseYear } from "@/lib/course-duration";
-import type { Branch, PaymentMode, Student } from "@/types";
+import { LETTERHEAD_FALLBACK, letterheadSrc } from "@/lib/letterhead";
+import type { Branch, Course, PaymentMode, Student } from "@/types";
 
 export type PrintableReceipt = {
   receipt_no: string | number;
@@ -11,63 +12,33 @@ export type PrintableReceipt = {
   reference_no: string | null;
 };
 
-function slug(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-// Letterheads are keyed by branch code + course name so the same course in
-// different branches can carry its own header, using names you control
-// (course ids are random UUIDs). Drop the images in public/letterheads/.
-// The <img> below tries each candidate in order and falls back to the next
-// on error, so a missing file degrades gracefully:
-//   1. /letterheads/<BRANCH_CODE>-<course-name>.png  e.g. PRT-bca.png
-//   2. /letterheads/<BRANCH_CODE>.png                (one header per branch)
-//   3. /logo.png                                     (default placeholder)
-function letterheadCandidates(branch: Branch | undefined, courseName: string) {
-  const candidates: string[] = [];
-  if (branch) {
-    candidates.push(`/letterheads/${branch.code}-${slug(courseName)}.png`);
-    candidates.push(`/letterheads/${branch.code}.png`);
-  }
-  candidates.push("/logo.png");
-  return candidates;
-}
-
 export function ReceiptPrint({
   student,
   branch,
+  course,
   receipt,
   academicYearStartMonth,
 }: {
   student: Student | undefined;
   branch: Branch | undefined;
+  course: Course | undefined;
   receipt: PrintableReceipt | null;
   academicYearStartMonth: number;
 }) {
   if (!student || !receipt) return <div id="receipt-print" />;
 
   const year = getCurrentCourseYear(student, academicYearStartMonth);
-  const candidates = letterheadCandidates(branch, student.course_name);
 
   return (
     <div id="receipt-print">
       <div className="mx-auto max-w-[210mm] px-12 py-8 font-serif text-[15px] text-black">
         <img
-          key={candidates[0]}
-          src={candidates[0]}
-          data-i="0"
+          src={letterheadSrc(course?.letterhead)}
           alt=""
           className="mb-6 w-full object-contain"
           onError={(e) => {
-            const img = e.currentTarget;
-            const next = Number(img.dataset.i) + 1;
-            if (next < candidates.length) {
-              img.dataset.i = String(next);
-              img.src = candidates[next];
-            }
+            if (e.currentTarget.src.endsWith(LETTERHEAD_FALLBACK)) return;
+            e.currentTarget.src = LETTERHEAD_FALLBACK;
           }}
         />
 
