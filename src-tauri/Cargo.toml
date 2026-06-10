@@ -31,3 +31,8 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["serde"] }
 tokio = { version = "1" }
 dotenvy = "0.15"
+
+# macOS (WKWebView) ignores JavaScript `window.print()`, so printing is driven
+# natively through the WKWebView print operation. See the `print_page` command.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"

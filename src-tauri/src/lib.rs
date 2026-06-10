@@ -439,6 +439,75 @@ async fn get_api_base(state: tauri::State<'_, CacheState>) -> Result<String, Str
     Ok(state.api_base.read().await.clone())
 }
 
+/// Open the OS print dialog for the current page.
+///
+/// On Windows (WebView2) and Linux (WebKitGTK) JavaScript `window.print()`
+/// works, so the frontend calls that directly there. macOS WKWebView ignores
+/// `window.print()` entirely, so we drive the native WKWebView print operation
+/// ourselves (mirrors what wry's `WebView::print` does internally).
+#[tauri::command]
+async fn print_page(window: tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .with_webview(|_webview| {
+            #[cfg(target_os = "macos")]
+            macos_print(_webview.inner());
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_print(webview_ptr: *mut std::ffi::c_void) {
+    use objc2::runtime::{AnyObject, Sel};
+    use objc2::{class, msg_send, sel};
+
+    if webview_ptr.is_null() {
+        return;
+    }
+
+    // Safety: `webview_ptr` is the live WKWebView handed to us by Tauri, and this
+    // runs on the main thread (Tauri dispatches `with_webview` there), which is
+    // required for AppKit print APIs.
+    unsafe {
+        let webview = &*(webview_ptr as *mut AnyObject);
+
+        // Available macOS 11+; bail gracefully on anything older.
+        let can_print: bool =
+            msg_send![webview, respondsToSelector: sel!(printOperationWithPrintInfo:)];
+        if !can_print {
+            return;
+        }
+
+        let print_info: *mut AnyObject = msg_send![class!(NSPrintInfo), sharedPrintInfo];
+        // Zero the paper margins so the page's own CSS (@page { margin: 0 } plus
+        // the template's padding) controls the layout, matching the receipt.
+        let _: () = msg_send![print_info, setTopMargin: 0.0_f64];
+        let _: () = msg_send![print_info, setRightMargin: 0.0_f64];
+        let _: () = msg_send![print_info, setBottomMargin: 0.0_f64];
+        let _: () = msg_send![print_info, setLeftMargin: 0.0_f64];
+
+        let operation: *mut AnyObject =
+            msg_send![webview, printOperationWithPrintInfo: print_info];
+        if operation.is_null() {
+            return;
+        }
+        // Let the print panel run without blocking the main thread.
+        let _: () = msg_send![operation, setCanSpawnSeparateThread: true];
+
+        let ns_window: *mut AnyObject = msg_send![webview, window];
+        if ns_window.is_null() {
+            let _: bool = msg_send![operation, runOperation];
+        } else {
+            let _: () = msg_send![
+                operation,
+                runOperationModalForWindow: ns_window,
+                delegate: std::ptr::null_mut::<AnyObject>(),
+                didRunSelector: None::<Sel>,
+                contextInfo: std::ptr::null_mut::<std::ffi::c_void>()
+            ];
+        }
+    }
+}
+
 fn append_sync_params(
     url: &mut String,
     since: &Option<String>,
@@ -693,6 +762,7 @@ pub fn run() {
             get_env_config_status,
             save_env_config,
             get_api_base,
+            print_page,
             sync_courses,
             sync_students,
             sync_receipts,

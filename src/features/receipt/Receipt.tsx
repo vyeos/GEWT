@@ -51,6 +51,7 @@ import {
 } from "@/lib/course-duration";
 import { money, today } from "@/lib/format";
 import { letterheadSrc } from "@/lib/letterhead";
+import { printPage } from "@/lib/print";
 import { cn } from "@/lib/utils";
 import type { Branch, Course, Me, PaymentMode, Student } from "@/types";
 import { ReceiptPrint, type PrintableReceipt } from "./ReceiptPrint";
@@ -371,14 +372,14 @@ export function Receipt({
       const done = () => {
         img.removeEventListener("load", done);
         img.removeEventListener("error", done);
-        window.print();
+        void printPage();
       };
       img.addEventListener("load", done);
       img.addEventListener("error", done);
       return;
     }
     // Defer one frame so the template is painted before printing.
-    requestAnimationFrame(() => window.print());
+    requestAnimationFrame(() => void printPage());
   }, [printReceipt]);
 
   function handlePrint(receipt: PrintableReceipt) {

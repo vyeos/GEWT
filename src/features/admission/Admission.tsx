@@ -30,6 +30,7 @@ import { cacheStudent } from "@/lib/cache";
 import { getCourseDuration } from "@/lib/course-duration";
 import { money, today } from "@/lib/format";
 import { letterheadSrc } from "@/lib/letterhead";
+import { printPage } from "@/lib/print";
 import { cn } from "@/lib/utils";
 import type { Branch, Course, Me, Student } from "@/types";
 import { AdmissionPrint, type PrintableAdmission } from "./AdmissionPrint";
@@ -85,6 +86,10 @@ export function Admission({
   // to open the print dialog after a successful save.
   const shouldPrintRef = useRef(false);
   const printAfterRenderRef = useRef(false);
+  // When a print is in flight we defer onSaved()'s global refresh until after
+  // window.print() has fired, so the refetch doesn't re-render the tree out
+  // from under the print dialog (which silently swallows the print).
+  const refreshAfterPrintRef = useRef(false);
   const selectedCourse = courses.find(
     (course) => course.id === form.course_id,
   );
@@ -126,18 +131,27 @@ export function Admission({
   useEffect(() => {
     if (!printSnapshot || !printAfterRenderRef.current) return;
     printAfterRenderRef.current = false;
+    const triggerPrint = () => {
+      void printPage();
+      // Refresh app data only after the print dialog has opened, so the
+      // refetch's re-render doesn't interfere with printing.
+      if (refreshAfterPrintRef.current) {
+        refreshAfterPrintRef.current = false;
+        onSaved();
+      }
+    };
     const img = document.querySelector<HTMLImageElement>("#admission-print img");
     if (img && !img.complete) {
       const done = () => {
         img.removeEventListener("load", done);
         img.removeEventListener("error", done);
-        window.print();
+        triggerPrint();
       };
       img.addEventListener("load", done);
       img.addEventListener("error", done);
       return;
     }
-    requestAnimationFrame(() => window.print());
+    requestAnimationFrame(triggerPrint);
   }, [printSnapshot]);
 
   async function submit(event: FormEvent) {
@@ -205,11 +219,14 @@ export function Admission({
           other_fee,
         });
         printAfterRenderRef.current = true;
+        refreshAfterPrintRef.current = true;
       }
       setForm(initialForm());
       setGeneratedFormNo("");
       void loadNextFormNo();
-      onSaved();
+      // When printing, onSaved() runs after window.print() (see the print
+      // effect) so the global refresh doesn't disrupt the print dialog.
+      if (!print) onSaved();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Admission failed");
     }
