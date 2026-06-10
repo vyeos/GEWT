@@ -1,6 +1,6 @@
 import { money } from "@/lib/format";
 import { getCourseDuration } from "@/lib/course-duration";
-import { LETTERHEAD_FALLBACK, letterheadSrc } from "@/lib/letterhead";
+import { PrintPage } from "@/components/print/PrintPage";
 import type { Branch, Course } from "@/types";
 
 export type PrintableAdmission = {
@@ -40,22 +40,12 @@ export function AdmissionPrint({
 
   return (
     <div id="admission-print">
-      <div className="mx-auto max-w-[210mm] px-12 py-8 font-serif text-[15px] text-black">
-        <img
-          src={letterheadSrc(course?.letterhead)}
-          alt=""
-          className="mb-6 w-full object-contain"
-          onError={(e) => {
-            if (e.currentTarget.src.endsWith(LETTERHEAD_FALLBACK)) return;
-            e.currentTarget.src = LETTERHEAD_FALLBACK;
-          }}
-        />
-
-        <div className="mb-6 text-center text-lg font-semibold uppercase tracking-wide">
+      <PrintPage letterhead={course?.letterhead}>
+        <div className="mb-4 text-center text-lg font-semibold uppercase tracking-wide">
           Admission Form
         </div>
 
-        <div className="mb-6 flex justify-between">
+        <div className="mb-4 flex justify-between">
           <span>
             <b>Form No:</b> {admission.form_no}
           </span>
@@ -64,7 +54,7 @@ export function AdmissionPrint({
           </span>
         </div>
 
-        <table className="mb-6 w-full border-collapse">
+        <table className="mb-3 w-full border-collapse">
           <tbody>
             {courseLine && <Row label="Course" value={courseLine} />}
             {duration && <Row label="Duration" value={duration} />}
@@ -92,7 +82,7 @@ export function AdmissionPrint({
           </tbody>
         </table>
 
-        <table className="mb-6 w-full border-collapse text-left">
+        <table className="mb-3 w-full border-collapse text-left">
           <thead>
             <tr className="border-y border-black">
               <th className="py-1.5">Fee Type</th>
@@ -115,7 +105,7 @@ export function AdmissionPrint({
           </tbody>
         </table>
 
-        <div className="mt-12 flex justify-between">
+        <div className="mt-auto flex justify-between">
           <div className="text-center">
             <div className="mb-1 h-12" />
             <div className="border-t border-black px-8 pt-1">
@@ -129,7 +119,7 @@ export function AdmissionPrint({
             </div>
           </div>
         </div>
-      </div>
+      </PrintPage>
     </div>
   );
 }
@@ -137,8 +127,8 @@ export function AdmissionPrint({
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <tr>
-      <td className="w-40 py-1 align-top font-semibold">{label}</td>
-      <td className="py-1 align-top">: {value}</td>
+      <td className="w-40 py-0.5 align-top font-semibold">{label}</td>
+      <td className="py-0.5 align-top">: {value}</td>
     </tr>
   );
 }

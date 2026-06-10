@@ -1,6 +1,6 @@
 import { amountInWords, money } from "@/lib/format";
 import { formatCourseYear, getCurrentCourseYear } from "@/lib/course-duration";
-import { LETTERHEAD_FALLBACK, letterheadSrc } from "@/lib/letterhead";
+import { PrintPage } from "@/components/print/PrintPage";
 import type { Branch, Course, PaymentMode, Student } from "@/types";
 
 export type PrintableReceipt = {
@@ -31,17 +31,7 @@ export function ReceiptPrint({
 
   return (
     <div id="receipt-print">
-      <div className="mx-auto max-w-[210mm] px-12 py-8 font-serif text-[15px] text-black">
-        <img
-          src={letterheadSrc(course?.letterhead)}
-          alt=""
-          className="mb-6 w-full object-contain"
-          onError={(e) => {
-            if (e.currentTarget.src.endsWith(LETTERHEAD_FALLBACK)) return;
-            e.currentTarget.src = LETTERHEAD_FALLBACK;
-          }}
-        />
-
+      <PrintPage letterhead={course?.letterhead}>
         <div className="mb-6 text-center text-lg font-semibold uppercase tracking-wide">
           Fee Receipt
         </div>
@@ -95,11 +85,11 @@ export function ReceiptPrint({
           </tbody>
         </table>
 
-        <p className="mb-12">
+        <p>
           <b>Amount in words:</b> {amountInWords(receipt.amount_paid)}
         </p>
 
-        <div className="flex justify-end">
+        <div className="mt-auto flex justify-end">
           <div className="text-center">
             <div className="mb-1 h-12" />
             <div className="border-t border-black px-8 pt-1">
@@ -107,7 +97,7 @@ export function ReceiptPrint({
             </div>
           </div>
         </div>
-      </div>
+      </PrintPage>
     </div>
   );
 }
