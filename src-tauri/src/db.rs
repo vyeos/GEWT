@@ -1,0 +1,1410 @@
+//! Local SQLite data layer for GEWT.
+//!
+//! This module replaces the former axum + PostgreSQL API. The desktop app now
+//! owns a single authoritative SQLite database in the app data directory and
+//! talks to it directly (no server, no network). The logic here is ported from
+//! the original `api/src/lib.rs` handlers, adapted to SQLite and to the new
+//! per-branch, per-year numbering scheme (`{branch}-{type}-{seq}-{year}`).
+
+use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, SaltString},
+    Argon2, PasswordVerifier,
+};
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::FromRow;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+pub type DbResult<T> = Result<T, String>;
+
+/// The Argon2id hash of the default `admin123` password, reused from the
+/// original Postgres seed. Rotated by the admin after first login.
+const DEFAULT_ADMIN_HASH: &str =
+    "$argon2id$v=19$m=19456,t=2,p=1$d1/80bbKsUauEfQW/gLl4g$FMqkF2PX6DU4pRJrSzTsRXu5pU5Hnd80+e0SRRbU/bI";
+
+pub fn db_file(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join("gewt.db")
+}
+
+pub async fn init_db(app_data_dir: &Path) -> DbResult<SqlitePool> {
+    let db_path = db_file(app_data_dir);
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite:{}?mode=rwc", db_path.display()))
+        .map_err(|e| e.to_string())?
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .foreign_keys(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(4)
+        .connect_with(opts)
+        .await
+        .map_err(|e| e.to_string())?;
+    create_schema(&pool).await?;
+    seed_if_empty(&pool).await?;
+    Ok(pool)
+}
+
+fn now_rfc3339() -> String {
+    Utc::now().to_rfc3339()
+}
+
+fn new_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+async fn create_schema(pool: &SqlitePool) -> DbResult<()> {
+    let statements = [
+        "CREATE TABLE IF NOT EXISTS branches (
+            id TEXT PRIMARY KEY,
+            code TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL UNIQUE,
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS roles (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE CHECK (name IN ('admin','employee'))
+        )",
+        "CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('admin','employee')),
+            branch_id TEXT REFERENCES branches(id),
+            active INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL,
+            CHECK (role = 'admin' OR branch_id IS NOT NULL)
+        )",
+        "CREATE TABLE IF NOT EXISTS courses (
+            id TEXT PRIMARY KEY,
+            branch_id TEXT NOT NULL REFERENCES branches(id),
+            name TEXT NOT NULL,
+            duration INTEGER NOT NULL CHECK (duration > 0),
+            duration_type TEXT NOT NULL CHECK (duration_type IN ('year','semester')),
+            letterhead TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL,
+            UNIQUE (branch_id, name)
+        )",
+        "CREATE TABLE IF NOT EXISTS academic_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            academic_year_start_month INTEGER NOT NULL DEFAULT 9 CHECK (academic_year_start_month BETWEEN 1 AND 12),
+            form_type_code TEXT NOT NULL DEFAULT '11',
+            receipt_type_code TEXT NOT NULL DEFAULT '12',
+            updated_at TEXT NOT NULL
+        )",
+        "CREATE TABLE IF NOT EXISTS students (
+            id TEXT PRIMARY KEY,
+            form_seq INTEGER NOT NULL,
+            form_year INTEGER NOT NULL,
+            admission_date TEXT NOT NULL,
+            branch_id TEXT NOT NULL REFERENCES branches(id),
+            course_id TEXT NOT NULL REFERENCES courses(id),
+            student_name TEXT NOT NULL,
+            category TEXT NOT NULL,
+            religion TEXT NOT NULL DEFAULT '',
+            caste TEXT NOT NULL DEFAULT '',
+            gender TEXT NOT NULL CHECK (gender IN ('Male','Female')),
+            aadhar TEXT NOT NULL DEFAULT '',
+            address TEXT NOT NULL DEFAULT '',
+            student_phone TEXT NOT NULL DEFAULT '',
+            parent_phone TEXT NOT NULL DEFAULT '',
+            fee_year_1 REAL NOT NULL DEFAULT 0,
+            fee_year_2 REAL NOT NULL DEFAULT 0,
+            fee_year_3 REAL NOT NULL DEFAULT 0,
+            fee_year_4 REAL NOT NULL DEFAULT 0,
+            tuition_fee_year_1 REAL NOT NULL DEFAULT 0,
+            tuition_fee_year_2 REAL NOT NULL DEFAULT 0,
+            tuition_fee_year_3 REAL NOT NULL DEFAULT 0,
+            tuition_fee_year_4 REAL NOT NULL DEFAULT 0,
+            other_fee_year_1 REAL NOT NULL DEFAULT 0,
+            other_fee_year_2 REAL NOT NULL DEFAULT 0,
+            other_fee_year_3 REAL NOT NULL DEFAULT 0,
+            other_fee_year_4 REAL NOT NULL DEFAULT 0,
+            current_course_year INTEGER NOT NULL DEFAULT 1 CHECK (current_course_year BETWEEN 1 AND 4),
+            current_course_period INTEGER NOT NULL DEFAULT 1 CHECK (current_course_period BETWEEN 1 AND 8),
+            admission_cancelled INTEGER NOT NULL DEFAULT 0,
+            admission_cancelled_at TEXT,
+            admission_cancelled_by TEXT,
+            created_by TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (branch_id, form_year, form_seq)
+        )",
+        "CREATE TABLE IF NOT EXISTS receipts (
+            id TEXT PRIMARY KEY,
+            receipt_seq INTEGER NOT NULL,
+            receipt_year INTEGER NOT NULL,
+            receipt_date TEXT NOT NULL,
+            student_id TEXT NOT NULL REFERENCES students(id),
+            branch_id TEXT NOT NULL REFERENCES branches(id),
+            fee_type TEXT NOT NULL DEFAULT 'Tuition' CHECK (fee_type IN ('Tuition','Other')),
+            amount_paid REAL NOT NULL CHECK (amount_paid > 0),
+            payment_mode TEXT NOT NULL CHECK (payment_mode IN ('Cash','UPI','DD','Cheque','NEFT','RTGS')),
+            reference_no TEXT,
+            created_by TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (branch_id, receipt_year, receipt_seq),
+            CHECK (payment_mode = 'Cash' OR reference_no IS NOT NULL)
+        )",
+        "CREATE TABLE IF NOT EXISTS number_sequences (
+            branch_id TEXT NOT NULL,
+            doc_type TEXT NOT NULL CHECK (doc_type IN ('form','receipt')),
+            academic_year INTEGER NOT NULL,
+            last_value INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (branch_id, doc_type, academic_year)
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_students_branch ON students (branch_id)",
+        "CREATE INDEX IF NOT EXISTS idx_receipts_branch ON receipts (branch_id)",
+        "CREATE INDEX IF NOT EXISTS idx_receipts_student ON receipts (student_id)",
+    ];
+    for stmt in statements {
+        sqlx::query(stmt)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
+    let now = now_rfc3339();
+
+    // Branches use STABLE, deterministic ids so that the same branch has the
+    // same id on every machine. This is what makes branch-partitioned backup
+    // import work across independent machines (branch_id references align, and
+    // re-seeding never creates a conflicting duplicate).
+    for (id, code, name) in [
+        ("11111111-1111-1111-1111-111111111111", "PRT", "Prantij"),
+        ("22222222-2222-2222-2222-222222222222", "HMT", "HMT"),
+        ("33333333-3333-3333-3333-333333333333", "TLD", "Talod"),
+    ] {
+        sqlx::query(
+            "INSERT OR IGNORE INTO branches (id, code, name, updated_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(code)
+        .bind(name)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
+    for role in ["admin", "employee"] {
+        sqlx::query("INSERT OR IGNORE INTO roles (id, name) VALUES (?, ?)")
+            .bind(new_id())
+            .bind(role)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    sqlx::query(
+        "INSERT OR IGNORE INTO academic_settings (id, academic_year_start_month, form_type_code, receipt_type_code, updated_at)
+         VALUES (1, 9, '11', '12', ?)",
+    )
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // The default admin also uses a stable id so re-seeding on another machine
+    // doesn't collide with an imported admin account (same id, same user_id).
+    sqlx::query(
+        "INSERT OR IGNORE INTO users (id, user_id, name, password_hash, role, branch_id, active, updated_at)
+         VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'admin', 'Initial Admin', ?, 'admin', NULL, 1, ?)",
+    )
+    .bind(DEFAULT_ADMIN_HASH)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Data types (shapes match the frontend TypeScript types exactly)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+pub struct Branch {
+    pub id: String,
+    pub code: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+pub struct Course {
+    pub id: String,
+    pub branch_id: String,
+    pub name: String,
+    pub duration: i64,
+    pub duration_type: String,
+    pub letterhead: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+pub struct User {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub role: String,
+    pub branch_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct Me {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub role: String,
+    pub branch_id: Option<String>,
+    pub branch_name: Option<String>,
+    pub academic_year_start_month: i64,
+    pub form_type_code: String,
+    pub receipt_type_code: String,
+}
+
+#[derive(Debug, Serialize, FromRow, Clone)]
+pub struct Student {
+    pub id: String,
+    pub form_no: String,
+    pub admission_date: String,
+    pub branch_id: String,
+    pub branch_name: String,
+    pub course_id: String,
+    pub course_name: String,
+    pub course_duration: i64,
+    pub course_duration_type: String,
+    pub current_course_year: i64,
+    pub current_course_period: i64,
+    pub student_name: String,
+    pub category: String,
+    pub religion: String,
+    pub caste: String,
+    pub gender: String,
+    pub aadhar: String,
+    pub address: String,
+    pub student_phone: String,
+    pub parent_phone: String,
+    pub fee_year_1: f64,
+    pub fee_year_2: f64,
+    pub fee_year_3: f64,
+    pub fee_year_4: f64,
+    pub tuition_fee_year_1: f64,
+    pub tuition_fee_year_2: f64,
+    pub tuition_fee_year_3: f64,
+    pub tuition_fee_year_4: f64,
+    pub other_fee_year_1: f64,
+    pub other_fee_year_2: f64,
+    pub other_fee_year_3: f64,
+    pub other_fee_year_4: f64,
+    pub admission_cancelled: bool,
+    pub admission_cancelled_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct Receipt {
+    pub id: String,
+    pub receipt_no: String,
+    pub receipt_date: String,
+    pub student_id: String,
+    pub branch_id: String,
+    pub fee_type: String,
+    pub amount_paid: f64,
+    pub payment_mode: String,
+    pub reference_no: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OutstandingFeeBreakdown {
+    pub due: f64,
+    pub paid: f64,
+    pub pending: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OutstandingYearBreakdown {
+    pub year: i32,
+    pub tuition: OutstandingFeeBreakdown,
+    pub other: OutstandingFeeBreakdown,
+    pub total_due: f64,
+    pub total_paid: f64,
+    pub pending: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OutstandingRow {
+    #[serde(flatten)]
+    pub student: Student,
+    pub total_due: f64,
+    pub total_paid: f64,
+    pub pending: f64,
+    pub current_period: String,
+    pub last_receipt_no: Option<String>,
+    pub year_breakdown: Vec<OutstandingYearBreakdown>,
+}
+
+// Request payloads (from the frontend).
+#[derive(Debug, Deserialize)]
+pub struct StudentRequest {
+    pub admission_date: String,
+    pub branch_id: String,
+    pub course_id: String,
+    pub student_name: String,
+    pub category: String,
+    pub religion: String,
+    pub caste: String,
+    pub gender: String,
+    pub aadhar: String,
+    pub address: String,
+    pub student_phone: String,
+    pub parent_phone: String,
+    pub fee_year_1: f64,
+    pub fee_year_2: f64,
+    pub fee_year_3: f64,
+    pub fee_year_4: f64,
+    pub tuition_fee_year_1: Option<f64>,
+    pub tuition_fee_year_2: Option<f64>,
+    pub tuition_fee_year_3: Option<f64>,
+    pub tuition_fee_year_4: Option<f64>,
+    pub other_fee_year_1: Option<f64>,
+    pub other_fee_year_2: Option<f64>,
+    pub other_fee_year_3: Option<f64>,
+    pub other_fee_year_4: Option<f64>,
+    pub current_course_period: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReceiptRequest {
+    pub student_id: String,
+    pub receipt_date: String,
+    pub fee_type: String,
+    pub amount_paid: f64,
+    pub payment_mode: String,
+    pub reference_no: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CourseRequest {
+    pub branch_id: String,
+    pub name: String,
+    pub duration: i64,
+    pub duration_type: String,
+    pub letterhead: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UserRequest {
+    pub user_id: String,
+    pub name: String,
+    pub role: String,
+    pub branch_id: Option<String>,
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PromoteRequest {
+    pub course_id: String,
+    pub admission_year: i32,
+    pub student_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PromoteResponse {
+    pub promoted_count: usize,
+    pub skipped_count: usize,
+    pub students: Vec<Student>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SettingsRequest {
+    pub academic_year_start_month: i64,
+    pub form_type_code: Option<String>,
+    pub receipt_type_code: Option<String>,
+}
+
+struct StudentFees {
+    yearly: [f64; 4],
+    tuition: [f64; 4],
+    other: [f64; 4],
+}
+
+impl StudentFees {
+    fn zero() -> Self {
+        Self {
+            yearly: [0.0; 4],
+            tuition: [0.0; 4],
+            other: [0.0; 4],
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+/// Verify credentials and return the user identity used for the session.
+pub async fn authenticate(pool: &SqlitePool, user_id: &str, password: &str) -> DbResult<User> {
+    let row: Option<(String, String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, name, password_hash, role, branch_id FROM users WHERE user_id = ? AND active = 1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let row = row.ok_or_else(|| "Invalid user ID or password".to_string())?;
+    let parsed = PasswordHash::new(&row.2).map_err(|_| "Invalid user ID or password".to_string())?;
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .map_err(|_| "Invalid user ID or password".to_string())?;
+
+    Ok(User {
+        id: row.0,
+        user_id: user_id.to_string(),
+        name: row.1,
+        role: row.3,
+        branch_id: row.4,
+    })
+}
+
+pub async fn load_me(pool: &SqlitePool, user_id: &str) -> DbResult<Me> {
+    sqlx::query_as::<_, Me>(
+        "SELECT u.id, u.user_id, u.name, u.role, u.branch_id, b.name AS branch_name,
+         s.academic_year_start_month, s.form_type_code, s.receipt_type_code
+         FROM users u
+         LEFT JOIN branches b ON b.id = u.branch_id
+         CROSS JOIN academic_settings s
+         WHERE u.id = ?",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+fn hash_password(password: &str) -> DbResult<String> {
+    let salt = SaltString::generate(&mut rand_core::OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(|_| "Could not hash password".to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Branches / courses / users / settings
+// ---------------------------------------------------------------------------
+
+pub async fn list_branches(pool: &SqlitePool, branch_filter: Option<&str>) -> DbResult<Vec<Branch>> {
+    let rows = if let Some(bid) = branch_filter {
+        sqlx::query_as("SELECT id, code, name FROM branches WHERE id = ? ORDER BY name")
+            .bind(bid)
+            .fetch_all(pool)
+            .await
+    } else {
+        sqlx::query_as("SELECT id, code, name FROM branches ORDER BY name")
+            .fetch_all(pool)
+            .await
+    };
+    rows.map_err(|e| e.to_string())
+}
+
+/// Admin can rename a branch's code (used in the numbering scheme).
+pub async fn update_branch_code(pool: &SqlitePool, id: &str, code: &str) -> DbResult<Branch> {
+    let code = code.trim();
+    if code.is_empty() {
+        return Err("Branch code is required".to_string());
+    }
+    sqlx::query("UPDATE branches SET code = ?, updated_at = ? WHERE id = ?")
+        .bind(code)
+        .bind(now_rfc3339())
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query_as("SELECT id, code, name FROM branches WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub async fn list_courses(pool: &SqlitePool, branch_filter: Option<&str>) -> DbResult<Vec<Course>> {
+    let rows = if let Some(bid) = branch_filter {
+        sqlx::query_as("SELECT id, branch_id, name, duration, duration_type, letterhead FROM courses WHERE active = 1 AND branch_id = ? ORDER BY name")
+            .bind(bid)
+            .fetch_all(pool)
+            .await
+    } else {
+        sqlx::query_as("SELECT id, branch_id, name, duration, duration_type, letterhead FROM courses WHERE active = 1 ORDER BY name")
+            .fetch_all(pool)
+            .await
+    };
+    rows.map_err(|e| e.to_string())
+}
+
+pub async fn create_course(pool: &SqlitePool, req: CourseRequest) -> DbResult<Course> {
+    let id = new_id();
+    sqlx::query(
+        "INSERT INTO courses (id, branch_id, name, duration, duration_type, letterhead, active, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+    )
+    .bind(&id)
+    .bind(&req.branch_id)
+    .bind(req.name.trim())
+    .bind(req.duration)
+    .bind(&req.duration_type)
+    .bind(&req.letterhead)
+    .bind(now_rfc3339())
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    load_course(pool, &id).await
+}
+
+pub async fn update_course(pool: &SqlitePool, id: &str, req: CourseRequest) -> DbResult<Course> {
+    sqlx::query(
+        "UPDATE courses SET branch_id = ?, name = ?, duration = ?, duration_type = ?, letterhead = ?, updated_at = ?
+         WHERE id = ? AND active = 1",
+    )
+    .bind(&req.branch_id)
+    .bind(req.name.trim())
+    .bind(req.duration)
+    .bind(&req.duration_type)
+    .bind(&req.letterhead)
+    .bind(now_rfc3339())
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    load_course(pool, id).await
+}
+
+async fn load_course(pool: &SqlitePool, id: &str) -> DbResult<Course> {
+    sqlx::query_as("SELECT id, branch_id, name, duration, duration_type, letterhead FROM courses WHERE id = ? AND active = 1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Course not found".to_string())
+}
+
+pub async fn list_users(pool: &SqlitePool) -> DbResult<Vec<User>> {
+    sqlx::query_as("SELECT id, user_id, name, role, branch_id FROM users ORDER BY name")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn normalize_user_request(req: &UserRequest) -> DbResult<(String, String, String, Option<String>)> {
+    let user_id = req.user_id.trim().to_string();
+    let name = req.name.trim().to_string();
+    let role = req.role.trim().to_string();
+    if user_id.is_empty() {
+        return Err("User ID is required".to_string());
+    }
+    if name.is_empty() {
+        return Err("Name is required".to_string());
+    }
+    if role != "admin" && role != "employee" {
+        return Err("Invalid role".to_string());
+    }
+    if role == "employee" && req.branch_id.is_none() {
+        return Err("Branch is required for employee users".to_string());
+    }
+    let branch_id = if role == "admin" {
+        None
+    } else {
+        req.branch_id.clone()
+    };
+    Ok((user_id, name, role, branch_id))
+}
+
+pub async fn create_user(pool: &SqlitePool, req: UserRequest) -> DbResult<User> {
+    let (user_id, name, role, branch_id) = normalize_user_request(&req)?;
+    let password = req
+        .password
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| "Password is required".to_string())?;
+    let id = new_id();
+    sqlx::query(
+        "INSERT INTO users (id, user_id, name, password_hash, role, branch_id, active, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+    )
+    .bind(&id)
+    .bind(&user_id)
+    .bind(&name)
+    .bind(hash_password(password)?)
+    .bind(&role)
+    .bind(&branch_id)
+    .bind(now_rfc3339())
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(User {
+        id,
+        user_id,
+        name,
+        role,
+        branch_id,
+    })
+}
+
+pub async fn update_user(pool: &SqlitePool, id: &str, req: UserRequest) -> DbResult<User> {
+    let (user_id, name, role, branch_id) = normalize_user_request(&req)?;
+    let now = now_rfc3339();
+    if let Some(password) = req
+        .password
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        sqlx::query(
+            "UPDATE users SET user_id = ?, name = ?, role = ?, branch_id = ?, password_hash = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(&user_id)
+        .bind(&name)
+        .bind(&role)
+        .bind(&branch_id)
+        .bind(hash_password(password)?)
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    } else {
+        sqlx::query(
+            "UPDATE users SET user_id = ?, name = ?, role = ?, branch_id = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(&user_id)
+        .bind(&name)
+        .bind(&role)
+        .bind(&branch_id)
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(User {
+        id: id.to_string(),
+        user_id,
+        name,
+        role,
+        branch_id,
+    })
+}
+
+pub async fn update_settings(pool: &SqlitePool, req: SettingsRequest) -> DbResult<()> {
+    if !(1..=12).contains(&req.academic_year_start_month) {
+        return Err("Academic year start month must be between 1 and 12".to_string());
+    }
+    sqlx::query(
+        "UPDATE academic_settings
+         SET academic_year_start_month = ?,
+             form_type_code = COALESCE(?, form_type_code),
+             receipt_type_code = COALESCE(?, receipt_type_code),
+             updated_at = ?
+         WHERE id = 1",
+    )
+    .bind(req.academic_year_start_month)
+    .bind(req.form_type_code.as_deref().map(str::trim).filter(|v| !v.is_empty()))
+    .bind(req.receipt_type_code.as_deref().map(str::trim).filter(|v| !v.is_empty()))
+    .bind(now_rfc3339())
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Numbering: {branch-code}-{type-code}-{seq}-{academic-year}
+// ---------------------------------------------------------------------------
+
+/// The academic year that a given `YYYY-MM-DD` date falls into, labelled by its
+/// starting calendar year. e.g. with start month 9, 2026-09-01 -> 2026 and
+/// 2026-06-01 -> 2025.
+fn academic_year(date: &str, start_month: i64) -> DbResult<i32> {
+    let parts: Vec<&str> = date.split('-').collect();
+    if parts.len() < 2 {
+        return Err("Invalid date".to_string());
+    }
+    let year: i32 = parts[0].parse().map_err(|_| "Invalid date".to_string())?;
+    let month: i64 = parts[1].parse().map_err(|_| "Invalid date".to_string())?;
+    Ok(if month >= start_month { year } else { year - 1 })
+}
+
+async fn start_month(pool: &SqlitePool) -> DbResult<i64> {
+    sqlx::query_scalar("SELECT academic_year_start_month FROM academic_settings WHERE id = 1")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn type_code(pool: &SqlitePool, doc_type: &str) -> DbResult<String> {
+    let col = if doc_type == "form" {
+        "form_type_code"
+    } else {
+        "receipt_type_code"
+    };
+    sqlx::query_scalar(&format!("SELECT {col} FROM academic_settings WHERE id = 1"))
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn branch_code(pool: &SqlitePool, branch_id: &str) -> DbResult<String> {
+    sqlx::query_scalar("SELECT code FROM branches WHERE id = ?")
+        .bind(branch_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Branch not found".to_string())
+}
+
+/// Peek the next sequence value without consuming it (for form previews).
+async fn peek_seq(pool: &SqlitePool, branch_id: &str, doc_type: &str, year: i32) -> DbResult<i64> {
+    let last: Option<i64> = sqlx::query_scalar(
+        "SELECT last_value FROM number_sequences WHERE branch_id = ? AND doc_type = ? AND academic_year = ?",
+    )
+    .bind(branch_id)
+    .bind(doc_type)
+    .bind(year)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(last.unwrap_or(0) + 1)
+}
+
+/// Atomically consume and return the next sequence value within a transaction.
+async fn next_seq(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    branch_id: &str,
+    doc_type: &str,
+    year: i32,
+) -> DbResult<i64> {
+    let value: i64 = sqlx::query_scalar(
+        "INSERT INTO number_sequences (branch_id, doc_type, academic_year, last_value)
+         VALUES (?, ?, ?, 1)
+         ON CONFLICT (branch_id, doc_type, academic_year)
+         DO UPDATE SET last_value = last_value + 1
+         RETURNING last_value",
+    )
+    .bind(branch_id)
+    .bind(doc_type)
+    .bind(year)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(value)
+}
+
+fn compose_code(branch_code: &str, type_code: &str, seq: i64, year: i32) -> String {
+    format!("{branch_code}-{type_code}-{seq}-{year}")
+}
+
+/// Composite preview of the next form/receipt number for a branch + date.
+pub async fn preview_number(
+    pool: &SqlitePool,
+    branch_id: &str,
+    doc_type: &str,
+    date: &str,
+) -> DbResult<String> {
+    let month = start_month(pool).await?;
+    let year = academic_year(date, month)?;
+    let seq = peek_seq(pool, branch_id, doc_type, year).await?;
+    Ok(compose_code(
+        &branch_code(pool, branch_id).await?,
+        &type_code(pool, doc_type).await?,
+        seq,
+        year,
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Students
+// ---------------------------------------------------------------------------
+
+fn student_select(where_clause: &str) -> String {
+    format!(
+        "SELECT s.id,
+         (b.code || '-' || aset.form_type_code || '-' || s.form_seq || '-' || s.form_year) AS form_no,
+         s.admission_date, s.branch_id, b.name AS branch_name, s.course_id, c.name AS course_name,
+         c.duration AS course_duration, c.duration_type AS course_duration_type,
+         s.current_course_year, s.current_course_period,
+         s.student_name, s.category, s.religion, s.caste, s.gender,
+         s.aadhar, s.address, s.student_phone, s.parent_phone,
+         s.fee_year_1, s.fee_year_2, s.fee_year_3, s.fee_year_4,
+         s.tuition_fee_year_1, s.tuition_fee_year_2, s.tuition_fee_year_3, s.tuition_fee_year_4,
+         s.other_fee_year_1, s.other_fee_year_2, s.other_fee_year_3, s.other_fee_year_4,
+         s.admission_cancelled, s.admission_cancelled_at
+         FROM students s
+         JOIN branches b ON b.id = s.branch_id
+         JOIN courses c ON c.id = s.course_id
+         CROSS JOIN academic_settings aset
+         {where_clause}
+         ORDER BY s.form_year DESC, s.form_seq ASC"
+    )
+}
+
+pub async fn list_students(
+    pool: &SqlitePool,
+    branch_filter: Option<&str>,
+    include_cancelled: bool,
+) -> DbResult<Vec<Student>> {
+    let sql = match (branch_filter.is_some(), include_cancelled) {
+        (true, true) => student_select("WHERE s.branch_id = ?"),
+        (true, false) => student_select("WHERE s.branch_id = ? AND s.admission_cancelled = 0"),
+        (false, true) => student_select(""),
+        (false, false) => student_select("WHERE s.admission_cancelled = 0"),
+    };
+    let mut query = sqlx::query_as::<_, Student>(&sql);
+    if let Some(bid) = branch_filter {
+        query = query.bind(bid.to_string());
+    }
+    query.fetch_all(pool).await.map_err(|e| e.to_string())
+}
+
+pub async fn load_student(pool: &SqlitePool, id: &str) -> DbResult<Student> {
+    sqlx::query_as::<_, Student>(&student_select("WHERE s.id = ?"))
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn normalize_student_fees(req: &StudentRequest) -> DbResult<StudentFees> {
+    let yearly = [req.fee_year_1, req.fee_year_2, req.fee_year_3, req.fee_year_4];
+    let tuition = [
+        req.tuition_fee_year_1.unwrap_or(req.fee_year_1),
+        req.tuition_fee_year_2.unwrap_or(req.fee_year_2),
+        req.tuition_fee_year_3.unwrap_or(req.fee_year_3),
+        req.tuition_fee_year_4.unwrap_or(req.fee_year_4),
+    ];
+    let other = [
+        req.other_fee_year_1.unwrap_or(0.0),
+        req.other_fee_year_2.unwrap_or(0.0),
+        req.other_fee_year_3.unwrap_or(0.0),
+        req.other_fee_year_4.unwrap_or(0.0),
+    ];
+    for i in 0..4 {
+        if yearly[i] < 0.0 || tuition[i] < 0.0 || other[i] < 0.0 {
+            return Err("Fee amounts cannot be negative".to_string());
+        }
+        if (tuition[i] + other[i] - yearly[i]).abs() > 0.01 {
+            return Err(format!(
+                "Tuition fee and other fee must add up to year {} fee",
+                i + 1
+            ));
+        }
+    }
+    Ok(StudentFees {
+        yearly,
+        tuition,
+        other,
+    })
+}
+
+pub async fn create_student(pool: &SqlitePool, req: StudentRequest) -> DbResult<Student> {
+    let course = load_course(pool, &req.course_id).await?;
+    if course.branch_id != req.branch_id {
+        return Err("Course does not belong to the selected branch".to_string());
+    }
+    let fees = normalize_student_fees(&req)?;
+    let month = start_month(pool).await?;
+    let year = academic_year(&req.admission_date, month)?;
+    let now = now_rfc3339();
+    let id = new_id();
+
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    let seq = next_seq(&mut tx, &req.branch_id, "form", year).await?;
+    sqlx::query(
+        "INSERT INTO students (id, form_seq, form_year, admission_date, branch_id, course_id, student_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone,
+            fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4,
+            current_course_year, current_course_period, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)",
+    )
+    .bind(&id)
+    .bind(seq)
+    .bind(year)
+    .bind(&req.admission_date)
+    .bind(&req.branch_id)
+    .bind(&req.course_id)
+    .bind(req.student_name.trim())
+    .bind(&req.category)
+    .bind(&req.religion)
+    .bind(&req.caste)
+    .bind(&req.gender)
+    .bind(&req.aadhar)
+    .bind(&req.address)
+    .bind(&req.student_phone)
+    .bind(&req.parent_phone)
+    .bind(fees.yearly[0])
+    .bind(fees.yearly[1])
+    .bind(fees.yearly[2])
+    .bind(fees.yearly[3])
+    .bind(fees.tuition[0])
+    .bind(fees.tuition[1])
+    .bind(fees.tuition[2])
+    .bind(fees.tuition[3])
+    .bind(fees.other[0])
+    .bind(fees.other[1])
+    .bind(fees.other[2])
+    .bind(fees.other[3])
+    .bind(&now)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    load_student(pool, &id).await
+}
+
+pub async fn update_student(pool: &SqlitePool, id: &str, req: StudentRequest) -> DbResult<Student> {
+    let existing = load_student(pool, id).await?;
+    let course = load_course(pool, &req.course_id).await?;
+    if course.branch_id != req.branch_id {
+        return Err("Course does not belong to the selected branch".to_string());
+    }
+    let mut fees = normalize_student_fees(&req)?;
+    if existing.admission_cancelled {
+        fees = StudentFees::zero();
+    }
+    let period = normalize_current_course_period(
+        req.current_course_period
+            .unwrap_or(existing.current_course_period),
+        &course,
+    )?;
+    let year = current_course_year_from_period(period);
+
+    // Form numbering is assigned once at admission and never changes on edit.
+    sqlx::query(
+        "UPDATE students SET admission_date = ?, branch_id = ?, course_id = ?, current_course_year = ?, current_course_period = ?,
+            student_name = ?, category = ?, religion = ?, caste = ?, gender = ?, aadhar = ?, address = ?, student_phone = ?, parent_phone = ?,
+            fee_year_1 = ?, fee_year_2 = ?, fee_year_3 = ?, fee_year_4 = ?, tuition_fee_year_1 = ?, tuition_fee_year_2 = ?, tuition_fee_year_3 = ?, tuition_fee_year_4 = ?,
+            other_fee_year_1 = ?, other_fee_year_2 = ?, other_fee_year_3 = ?, other_fee_year_4 = ?, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(&req.admission_date)
+    .bind(&req.branch_id)
+    .bind(&req.course_id)
+    .bind(year)
+    .bind(period)
+    .bind(req.student_name.trim())
+    .bind(&req.category)
+    .bind(&req.religion)
+    .bind(&req.caste)
+    .bind(&req.gender)
+    .bind(&req.aadhar)
+    .bind(&req.address)
+    .bind(&req.student_phone)
+    .bind(&req.parent_phone)
+    .bind(fees.yearly[0])
+    .bind(fees.yearly[1])
+    .bind(fees.yearly[2])
+    .bind(fees.yearly[3])
+    .bind(fees.tuition[0])
+    .bind(fees.tuition[1])
+    .bind(fees.tuition[2])
+    .bind(fees.tuition[3])
+    .bind(fees.other[0])
+    .bind(fees.other[1])
+    .bind(fees.other[2])
+    .bind(fees.other[3])
+    .bind(now_rfc3339())
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    load_student(pool, id).await
+}
+
+pub async fn cancel_student(pool: &SqlitePool, id: &str, by_user: &str) -> DbResult<Student> {
+    let existing = load_student(pool, id).await?;
+    if existing.admission_cancelled {
+        return Ok(existing);
+    }
+    sqlx::query(
+        "UPDATE students SET admission_cancelled = 1, admission_cancelled_at = ?, admission_cancelled_by = ?,
+            fee_year_1 = 0, fee_year_2 = 0, fee_year_3 = 0, fee_year_4 = 0,
+            tuition_fee_year_1 = 0, tuition_fee_year_2 = 0, tuition_fee_year_3 = 0, tuition_fee_year_4 = 0,
+            other_fee_year_1 = 0, other_fee_year_2 = 0, other_fee_year_3 = 0, other_fee_year_4 = 0,
+            updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(now_rfc3339())
+    .bind(by_user)
+    .bind(now_rfc3339())
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    load_student(pool, id).await
+}
+
+pub async fn promote_students(pool: &SqlitePool, req: PromoteRequest) -> DbResult<PromoteResponse> {
+    if req.student_ids.is_empty() {
+        return Err("Select at least one student to promote".to_string());
+    }
+    if !(1900..=2200).contains(&req.admission_year) {
+        return Err("Invalid admission year".to_string());
+    }
+    let course = load_course(pool, &req.course_id).await?;
+    let max_period = total_course_periods(course.duration, &course.duration_type);
+
+    // De-duplicate the requested ids while preserving order.
+    let mut seen = std::collections::HashSet::new();
+    let ids: Vec<String> = req
+        .student_ids
+        .into_iter()
+        .filter(|id| seen.insert(id.clone()))
+        .collect();
+
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    let mut candidates: Vec<String> = Vec::new();
+    for id in &ids {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT id FROM students
+             WHERE id = ? AND course_id = ? AND branch_id = ?
+               AND CAST(strftime('%Y', admission_date) AS INTEGER) = ?
+               AND admission_cancelled = 0",
+        )
+        .bind(id)
+        .bind(&course.id)
+        .bind(&course.branch_id)
+        .bind(req.admission_year)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if let Some(row) = row {
+            candidates.push(row.0);
+        }
+    }
+    if candidates.len() != ids.len() {
+        return Err(
+            "Selected students do not match the chosen course and admission year".to_string(),
+        );
+    }
+
+    let now = now_rfc3339();
+    let mut promoted = 0usize;
+    for id in &candidates {
+        let result = sqlx::query(
+            "UPDATE students
+             SET current_course_period = current_course_period + 1,
+                 current_course_year = (current_course_period + 2) / 2,
+                 updated_at = ?
+             WHERE id = ? AND current_course_period < ?",
+        )
+        .bind(&now)
+        .bind(id)
+        .bind(max_period)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        promoted += result.rows_affected() as usize;
+    }
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    let mut students = Vec::new();
+    for id in &candidates {
+        students.push(load_student(pool, id).await?);
+    }
+
+    Ok(PromoteResponse {
+        promoted_count: promoted,
+        skipped_count: candidates.len().saturating_sub(promoted),
+        students,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Receipts
+// ---------------------------------------------------------------------------
+
+fn receipt_select(where_clause: &str) -> String {
+    format!(
+        "SELECT r.id,
+         (b.code || '-' || aset.receipt_type_code || '-' || r.receipt_seq || '-' || r.receipt_year) AS receipt_no,
+         r.receipt_date, r.student_id, r.branch_id, COALESCE(r.fee_type, 'Tuition') AS fee_type,
+         r.amount_paid, r.payment_mode, r.reference_no
+         FROM receipts r
+         JOIN branches b ON b.id = r.branch_id
+         CROSS JOIN academic_settings aset
+         {where_clause}
+         ORDER BY r.receipt_year DESC, r.receipt_seq DESC"
+    )
+}
+
+pub async fn list_receipts(
+    pool: &SqlitePool,
+    branch_filter: Option<&str>,
+    student_id: Option<&str>,
+) -> DbResult<Vec<Receipt>> {
+    let (sql, binds): (String, Vec<String>) = match (branch_filter, student_id) {
+        (Some(b), Some(s)) => (
+            receipt_select("WHERE r.branch_id = ? AND r.student_id = ?"),
+            vec![b.to_string(), s.to_string()],
+        ),
+        (Some(b), None) => (
+            receipt_select("WHERE r.branch_id = ?"),
+            vec![b.to_string()],
+        ),
+        (None, Some(s)) => (
+            receipt_select("WHERE r.student_id = ?"),
+            vec![s.to_string()],
+        ),
+        (None, None) => (receipt_select(""), vec![]),
+    };
+    let mut query = sqlx::query_as::<_, Receipt>(&sql);
+    for b in binds {
+        query = query.bind(b);
+    }
+    query.fetch_all(pool).await.map_err(|e| e.to_string())
+}
+
+/// Returns (branch_id, admission_cancelled) for a student.
+pub async fn student_branch(pool: &SqlitePool, student_id: &str) -> DbResult<(String, bool)> {
+    sqlx::query_as("SELECT branch_id, admission_cancelled FROM students WHERE id = ?")
+        .bind(student_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Student not found".to_string())
+}
+
+pub async fn create_receipt(pool: &SqlitePool, req: ReceiptRequest, branch_id: &str) -> DbResult<Receipt> {
+    if req.amount_paid <= 0.0 {
+        return Err("Amount paid is required".to_string());
+    }
+    if !["Tuition", "Other"].contains(&req.fee_type.as_str()) {
+        return Err("Invalid fee type".to_string());
+    }
+    if req.payment_mode != "Cash" && req.reference_no.as_deref().unwrap_or("").is_empty() {
+        return Err("Reference number is required for this payment mode".to_string());
+    }
+    let month = start_month(pool).await?;
+    let year = academic_year(&req.receipt_date, month)?;
+    let now = now_rfc3339();
+    let id = new_id();
+
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    let seq = next_seq(&mut tx, branch_id, "receipt", year).await?;
+    sqlx::query(
+        "INSERT INTO receipts (id, receipt_seq, receipt_year, receipt_date, student_id, branch_id, fee_type, amount_paid, payment_mode, reference_no, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(seq)
+    .bind(year)
+    .bind(&req.receipt_date)
+    .bind(&req.student_id)
+    .bind(branch_id)
+    .bind(&req.fee_type)
+    .bind(req.amount_paid)
+    .bind(&req.payment_mode)
+    .bind(req.reference_no.as_deref().filter(|v| !v.is_empty()))
+    .bind(&now)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    sqlx::query_as::<_, Receipt>(&receipt_select("WHERE r.id = ?"))
+        .bind(&id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Outstanding report (pure logic ported verbatim from the original API)
+// ---------------------------------------------------------------------------
+
+fn total_course_years(duration: i64, duration_type: &str) -> i64 {
+    let years = if duration_type == "semester" {
+        (duration + 1) / 2
+    } else {
+        duration
+    };
+    years.clamp(1, 4)
+}
+
+fn total_course_periods(duration: i64, duration_type: &str) -> i64 {
+    if duration_type == "semester" {
+        duration.clamp(1, 8)
+    } else {
+        total_course_years(duration, duration_type) * 2
+    }
+}
+
+fn clamp_current_period(student: &Student) -> i64 {
+    student.current_course_period.clamp(
+        1,
+        total_course_periods(student.course_duration, &student.course_duration_type),
+    )
+}
+
+fn current_period_label(student: &Student) -> String {
+    let p = clamp_current_period(student);
+    if student.course_duration_type == "semester" {
+        format!("Semester {p}")
+    } else {
+        format!("Term {p}")
+    }
+}
+
+fn normalize_current_course_period(period: i64, course: &Course) -> DbResult<i64> {
+    let max_period = total_course_periods(course.duration, &course.duration_type);
+    if period < 1 || period > max_period {
+        return Err(format!("Current period must be between 1 and {max_period}"));
+    }
+    Ok(period)
+}
+
+fn current_course_year_from_period(period: i64) -> i64 {
+    ((period + 1) / 2).max(1)
+}
+
+fn fee_breakdown(due: f64, paid: f64) -> OutstandingFeeBreakdown {
+    OutstandingFeeBreakdown {
+        due,
+        paid,
+        pending: (due - paid).max(0.0),
+    }
+}
+
+fn allocate_fee_by_year(
+    yearly_fees: [f64; 4],
+    course_duration: i64,
+    duration_type: &str,
+    current_period: i64,
+    mut paid: f64,
+) -> Vec<OutstandingFeeBreakdown> {
+    let total_years = total_course_years(course_duration, duration_type) as usize;
+    let total_periods = total_course_periods(course_duration, duration_type) as usize;
+    let due_periods = (current_period as usize).min(total_periods).max(1);
+    let mut due_by_year = [0.0; 4];
+    let mut paid_by_year = [0.0; 4];
+
+    for period_index in 0..due_periods {
+        let year_index = period_index / 2;
+        let period_due = yearly_fees[year_index] / 2.0;
+        let period_paid = paid.min(period_due);
+        paid -= period_paid;
+        due_by_year[year_index] += period_due;
+        paid_by_year[year_index] += period_paid;
+    }
+
+    (0..total_years)
+        .map(|i| fee_breakdown(due_by_year[i], paid_by_year[i]))
+        .collect()
+}
+
+fn outstanding_year_breakdown(
+    student: &Student,
+    tuition_paid: f64,
+    other_paid: f64,
+) -> Vec<OutstandingYearBreakdown> {
+    let current_period = clamp_current_period(student);
+    let tuition = allocate_fee_by_year(
+        [
+            student.tuition_fee_year_1,
+            student.tuition_fee_year_2,
+            student.tuition_fee_year_3,
+            student.tuition_fee_year_4,
+        ],
+        student.course_duration,
+        &student.course_duration_type,
+        current_period,
+        tuition_paid,
+    );
+    let other = allocate_fee_by_year(
+        [
+            student.other_fee_year_1,
+            student.other_fee_year_2,
+            student.other_fee_year_3,
+            student.other_fee_year_4,
+        ],
+        student.course_duration,
+        &student.course_duration_type,
+        current_period,
+        other_paid,
+    );
+    let total_years = total_course_years(student.course_duration, &student.course_duration_type);
+
+    (0..total_years as usize)
+        .map(|i| {
+            let t = &tuition[i];
+            let o = &other[i];
+            OutstandingYearBreakdown {
+                year: i as i32 + 1,
+                total_due: t.due + o.due,
+                total_paid: t.paid + o.paid,
+                pending: t.pending + o.pending,
+                tuition: fee_breakdown(t.due, t.paid),
+                other: fee_breakdown(o.due, o.paid),
+            }
+        })
+        .collect()
+}
+
+pub async fn outstanding(pool: &SqlitePool, branch_filter: Option<&str>) -> DbResult<Vec<OutstandingRow>> {
+    let students = list_students(pool, branch_filter, false).await?;
+    let mut rows = Vec::new();
+    for student in students {
+        let paid_rows: Vec<(String, f64)> = sqlx::query_as(
+            "SELECT COALESCE(fee_type, 'Tuition') AS fee_type, COALESCE(SUM(amount_paid), 0) AS total_paid
+             FROM receipts WHERE student_id = ? GROUP BY COALESCE(fee_type, 'Tuition')",
+        )
+        .bind(&student.id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let mut paid_by_type: HashMap<String, f64> = HashMap::new();
+        for (fee_type, total) in paid_rows {
+            paid_by_type.insert(fee_type, total);
+        }
+
+        let year_breakdown = outstanding_year_breakdown(
+            &student,
+            paid_by_type.get("Tuition").copied().unwrap_or(0.0),
+            paid_by_type.get("Other").copied().unwrap_or(0.0),
+        );
+        let total_due: f64 = year_breakdown.iter().map(|r| r.total_due).sum();
+        let total_paid: f64 = year_breakdown.iter().map(|r| r.total_paid).sum();
+        let pending: f64 = year_breakdown.iter().map(|r| r.pending).sum();
+        if pending > 0.0 {
+            let last_receipt_no: Option<String> = sqlx::query_scalar(
+                "SELECT (b.code || '-' || aset.receipt_type_code || '-' || r.receipt_seq || '-' || r.receipt_year)
+                 FROM receipts r JOIN branches b ON b.id = r.branch_id CROSS JOIN academic_settings aset
+                 WHERE r.student_id = ? ORDER BY r.receipt_year DESC, r.receipt_seq DESC LIMIT 1",
+            )
+            .bind(&student.id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+            rows.push(OutstandingRow {
+                current_period: current_period_label(&student),
+                student,
+                total_due,
+                total_paid,
+                pending,
+                last_receipt_no,
+                year_breakdown,
+            });
+        }
+    }
+    Ok(rows)
+}

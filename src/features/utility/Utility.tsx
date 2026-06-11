@@ -51,7 +51,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api } from "@/lib/api";
+import { api, updateBranchCode } from "@/lib/api";
 import { fetchLetterheads, letterheadSrc } from "@/lib/letterhead";
 import type { Branch, Course, Me, User } from "@/types";
 
@@ -123,7 +123,12 @@ export function Utility({
   const [branchFilter, setBranchFilter] = useState("all");
   const [settings, setSettings] = useState({
     academic_year_start_month: me.academic_year_start_month,
+    form_type_code: me.form_type_code,
+    receipt_type_code: me.receipt_type_code,
   });
+  const [branchCodes, setBranchCodes] = useState<Record<string, string>>(() =>
+    Object.fromEntries(branches.map((b) => [b.id, b.code])),
+  );
 
   const filteredUsers = useMemo(() => {
     const term = userSearch.trim().toLowerCase();
@@ -269,6 +274,18 @@ export function Utility({
     });
     toast.success("Academic settings saved");
     onSaved();
+  }
+
+  async function saveBranchCode(branchId: string) {
+    try {
+      await updateBranchCode(branchId, branchCodes[branchId] ?? "");
+      toast.success("Branch code updated");
+      onSaved();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not update branch code",
+      );
+    }
   }
 
   return (
@@ -835,33 +852,102 @@ export function Utility({
       </TabsContent>
 
       <TabsContent value="settings" className="mt-4">
-        <Card className="max-w-xl">
-          <CardHeader>
-            <CardTitle>Academic settings</CardTitle>
-            <CardDescription>Configure system-wide preferences</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-5">
-            <div className="flex flex-col gap-2">
-              <Label>Academic year start month</Label>
-              <Input
-                type="number"
-                min="1"
-                max="12"
-                value={settings.academic_year_start_month}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    academic_year_start_month: Number(e.currentTarget.value),
-                  })
-                }
-              />
-            </div>
-            <Button onClick={saveSettings} type="button" className="self-start">
-              <Settings className="size-4" />
-              Save settings
-            </Button>
-          </CardContent>
-        </Card>
+        <div className="flex flex-col gap-6">
+          <Card className="max-w-xl">
+            <CardHeader>
+              <CardTitle>Academic settings</CardTitle>
+              <CardDescription>
+                Configure system-wide preferences. The form and receipt codes are
+                used in the document number{" "}
+                <code className="rounded bg-muted px-1 py-0.5 text-xs">
+                  {`{branch}-{type}-{number}-{year}`}
+                </code>
+                .
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-5">
+              <div className="flex flex-col gap-2">
+                <Label>Academic year start month</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="12"
+                  value={settings.academic_year_start_month}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      academic_year_start_month: Number(e.currentTarget.value),
+                    })
+                  }
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex flex-col gap-2">
+                  <Label>Form number code</Label>
+                  <Input
+                    value={settings.form_type_code}
+                    onChange={(e) =>
+                      setSettings({
+                        ...settings,
+                        form_type_code: e.currentTarget.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Receipt number code</Label>
+                  <Input
+                    value={settings.receipt_type_code}
+                    onChange={(e) =>
+                      setSettings({
+                        ...settings,
+                        receipt_type_code: e.currentTarget.value,
+                      })
+                    }
+                  />
+                </div>
+              </div>
+              <Button onClick={saveSettings} type="button" className="self-start">
+                <Settings className="size-4" />
+                Save settings
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="max-w-xl">
+            <CardHeader>
+              <CardTitle>Branch codes</CardTitle>
+              <CardDescription>
+                The branch segment used in form and receipt numbers.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              {branches.map((branch) => (
+                <div key={branch.id} className="flex items-end gap-3">
+                  <div className="flex flex-1 flex-col gap-2">
+                    <Label>{branch.name}</Label>
+                    <Input
+                      value={branchCodes[branch.id] ?? ""}
+                      onChange={(e) =>
+                        setBranchCodes((current) => ({
+                          ...current,
+                          [branch.id]: e.currentTarget.value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void saveBranchCode(branch.id)}
+                  >
+                    Save
+                  </Button>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
       </TabsContent>
     </Tabs>
   );

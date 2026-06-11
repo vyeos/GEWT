@@ -6,6 +6,7 @@ export type Screen =
   | "promote"
   | "outstanding"
   | "students"
+  | "backup"
   | "utility";
 
 export type PaymentMode = "Cash" | "UPI" | "DD" | "Cheque" | "NEFT" | "RTGS";
@@ -32,6 +33,8 @@ export type User = {
 export type Me = User & {
   branch_name: string | null;
   academic_year_start_month: number;
+  form_type_code: string;
+  receipt_type_code: string;
 };
 
 export type Student = {

@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  DatabaseBackup,
   Download,
   FileText,
   GraduationCap,
@@ -80,10 +81,17 @@ const nav: {
     adminOnly: true,
   },
   {
+    key: "backup",
+    label: "Backup",
+    desc: "Export, import & local snapshots",
+    icon: DatabaseBackup,
+  },
+  {
     key: "utility",
     label: "Utility",
     desc: "Courses, users & settings",
     icon: Settings,
+    adminOnly: true,
   },
 ];
 

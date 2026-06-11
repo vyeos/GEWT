@@ -5,7 +5,6 @@ import {
   ImageIcon,
   ImageOff,
   Printer,
-  RotateCcw,
   UserPlus,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -27,7 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { api } from "@/lib/api";
+import { api, previewFormNo } from "@/lib/api";
 import { cacheStudent } from "@/lib/cache";
 import { getCourseDuration } from "@/lib/course-duration";
 import { money, today } from "@/lib/format";
@@ -77,7 +76,6 @@ export function Admission({
     other_fee: 0,
   });
   const [form, setForm] = useState(initialForm);
-  const [generatedFormNo, setGeneratedFormNo] = useState("");
   const [courseOpen, setCourseOpen] = useState(false);
   const [printSnapshot, setPrintSnapshot] = useState<PrintableAdmission | null>(
     null,
@@ -111,22 +109,24 @@ export function Admission({
   const otherFeeMax = Math.max(0, form.yearly_fee - form.tuition_fee);
 
   async function loadNextFormNo() {
+    if (!form.branch_id) {
+      setForm((current) => ({ ...current, form_no: "" }));
+      return;
+    }
     try {
-      const next = await api<{ form_no: string }>(
-        "/students/next-form-no",
-        token,
-      );
-      setGeneratedFormNo(next.form_no);
-      setForm((current) => ({ ...current, form_no: next.form_no }));
+      const next = await previewFormNo(form.branch_id, form.admission_date);
+      setForm((current) => ({ ...current, form_no: next }));
     } catch {
-      setGeneratedFormNo("");
       setForm((current) => ({ ...current, form_no: "" }));
     }
   }
 
+  // The form number is system-generated as {branch}-{type}-{seq}-{year}; it
+  // depends on the branch and the academic year of the admission date.
   useEffect(() => {
     void loadNextFormNo();
-  }, [token]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.branch_id, form.admission_date]);
 
   // Wait for the letterhead image to load, then open the print dialog. Mirrors
   // the receipt print flow: the webview prints whatever is in #admission-print.
@@ -224,7 +224,6 @@ export function Admission({
         refreshAfterPrintRef.current = true;
       }
       setForm(initialForm());
-      setGeneratedFormNo("");
       void loadNextFormNo();
       // When printing, onSaved() runs after window.print() (see the print
       // effect) so the global refresh doesn't disrupt the print dialog.
@@ -273,29 +272,11 @@ export function Admission({
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
               <Label>Form No.</Label>
-              <div className="flex gap-2">
-                <Input
-                  required
-                  value={form.form_no}
-                  onChange={(e) =>
-                    setForm({ ...form, form_no: e.currentTarget.value })
-                  }
-                />
-                {generatedFormNo && form.form_no !== generatedFormNo && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    title="Reset form number"
-                    aria-label="Reset form number"
-                    onClick={() =>
-                      setForm({ ...form, form_no: generatedFormNo })
-                    }
-                  >
-                    <RotateCcw className="size-4" />
-                  </Button>
-                )}
-              </div>
+              <Input
+                value={form.form_no || "Select a course to generate"}
+                readOnly
+                disabled
+              />
             </div>
             <div className="flex flex-col gap-2">
               <Label>Admission date</Label>

@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Course, Me, Student } from "@/types";
 
+// The app is now fully local: the SQLite database IS the source of truth, so
+// the former offline "cache + sync" layer is gone. These helpers are kept so the
+// feature components don't have to change — reads go straight to the local DB
+// and the old sync/cache write paths become no-ops.
+
 export type SyncResult = {
   synced_count: number;
   is_initial: boolean;
@@ -8,7 +13,7 @@ export type SyncResult = {
 
 export type CachedReceipt = {
   id: string;
-  receipt_no: number;
+  receipt_no: string;
   receipt_date: string;
   student_id: string;
   branch_id: string;
@@ -16,7 +21,6 @@ export type CachedReceipt = {
   amount_paid: number;
   payment_mode: string;
   reference_no: string | null;
-  updated_at: string;
 };
 
 export type SyncStatus = {
@@ -29,63 +33,66 @@ export function syncScope(me: Me) {
   return me.role === "admin" ? "admin" : `branch:${me.branch_id}`;
 }
 
-export function syncCourses(token: string, scopeKey: string) {
-  return invoke<SyncResult>("sync_courses", { token, scopeKey });
+const noopSync: SyncResult = { synced_count: 0, is_initial: false };
+
+export function syncCourses(_token?: string, _scopeKey?: string): Promise<SyncResult> {
+  return Promise.resolve(noopSync);
 }
 
-export function syncStudents(token: string, scopeKey: string) {
-  return invoke<SyncResult>("sync_students", { token, scopeKey });
+export function syncStudents(_token?: string, _scopeKey?: string): Promise<SyncResult> {
+  return Promise.resolve(noopSync);
 }
 
-export function syncReceipts(token: string, scopeKey: string) {
-  return invoke<SyncResult>("sync_receipts", { token, scopeKey });
+export function syncReceipts(_token?: string, _scopeKey?: string): Promise<SyncResult> {
+  return Promise.resolve(noopSync);
 }
 
-export async function syncAll(token: string, me: Me) {
-  const scopeKey = syncScope(me);
-  return Promise.all([
-    syncCourses(token, scopeKey),
-    syncStudents(token, scopeKey),
-    syncReceipts(token, scopeKey),
-  ]);
+export async function syncAll(_token?: string, _me?: Me): Promise<SyncResult[]> {
+  return [noopSync, noopSync, noopSync];
 }
 
-export function getCachedCourses(branchId?: string): Promise<Course[]> {
-  return invoke<Course[]>("get_cached_courses", {
-    branchId: branchId ?? null,
+export async function getCachedCourses(branchId?: string): Promise<Course[]> {
+  const courses = await invoke<Course[]>("list_courses");
+  return branchId ? courses.filter((c) => c.branch_id === branchId) : courses;
+}
+
+export async function getCachedStudents(branchId?: string): Promise<Student[]> {
+  const students = await invoke<Student[]>("list_students", {
+    includeCancelled: false,
   });
+  return branchId ? students.filter((s) => s.branch_id === branchId) : students;
 }
 
-export function getCachedStudents(branchId?: string): Promise<Student[]> {
-  return invoke<Student[]>("get_cached_students", {
-    branchId: branchId ?? null,
-  });
-}
-
-export function getCachedReceipts(
+export async function getCachedReceipts(
   studentId?: string,
   branchId?: string,
 ): Promise<CachedReceipt[]> {
-  return invoke<CachedReceipt[]>("get_cached_receipts", {
+  const receipts = await invoke<CachedReceipt[]>("list_receipts", {
     studentId: studentId ?? null,
-    branchId: branchId ?? null,
+  });
+  return branchId
+    ? receipts.filter((r) => r.branch_id === branchId)
+    : receipts;
+}
+
+// Writes go directly to the DB through the create/update commands, so caching a
+// returned record is a no-op now.
+export function cacheStudent(_student: unknown): Promise<void> {
+  return Promise.resolve();
+}
+
+export function cacheReceipt(_receipt: unknown): Promise<void> {
+  return Promise.resolve();
+}
+
+export function getSyncStatus(): Promise<SyncStatus> {
+  return Promise.resolve({
+    courses: { last_synced: null, count: 0 },
+    students: { last_synced: null, count: 0 },
+    receipts: { last_synced: null, count: 0 },
   });
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function cacheStudent(student: any) {
-  return invoke("cache_student", { student });
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function cacheReceipt(receipt: any) {
-  return invoke("cache_receipt", { receipt });
-}
-
-export function getSyncStatus(scopeKey: string) {
-  return invoke<SyncStatus>("get_sync_status", { scopeKey });
-}
-
-export function resetCache() {
-  return invoke("reset_cache");
+export function resetCache(): Promise<void> {
+  return Promise.resolve();
 }

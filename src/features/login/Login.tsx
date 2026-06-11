@@ -1,5 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { Settings } from "lucide-react";
+import { useState, type FormEvent } from "react";
 import { toast, Toaster } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,93 +10,25 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api } from "@/lib/api";
-import {
-  getEnvConfigStatus,
-  saveEnvConfig,
-  type EnvConfigStatus,
-} from "@/lib/env-config";
+import { login } from "@/lib/api";
+import type { Me } from "@/types";
 
-export function Login({ onLogin }: { onLogin: (token: string) => void }) {
+export function Login({ onLogin }: { onLogin: (me: Me) => void }) {
   const [userId, setUserId] = useState("admin");
   const [password, setPassword] = useState("admin123");
   const [busy, setBusy] = useState(false);
-  const [configStatus, setConfigStatus] = useState<EnvConfigStatus | null>(
-    null,
-  );
-  const [checkingConfig, setCheckingConfig] = useState(true);
-  const [databaseUrl, setDatabaseUrl] = useState(
-    "postgres://postgres:postgres@localhost:5432/gewt",
-  );
-  const [jwtSecret, setJwtSecret] = useState("");
-  const [apiAddr, setApiAddr] = useState("127.0.0.1:45123");
-  const [savingConfig, setSavingConfig] = useState(false);
-  const [changingConfig, setChangingConfig] = useState(false);
-
-  const needsConfig =
-    configStatus?.configured === false ||
-    (configStatus?.configured === true && configStatus.api_ready === false);
-  const showConfigForm = needsConfig || changingConfig;
-
-  useEffect(() => {
-    getEnvConfigStatus()
-      .then((status) => setConfigStatus(status))
-      .finally(() => setCheckingConfig(false));
-  }, []);
-
-  useEffect(() => {
-    if (!configStatus?.configured || configStatus.api_ready) {
-      return;
-    }
-
-    const poll = window.setInterval(() => {
-      void getEnvConfigStatus().then((status) => {
-        if (status) {
-          setConfigStatus(status);
-        }
-      });
-    }, 1500);
-
-    return () => window.clearInterval(poll);
-  }, [configStatus?.configured, configStatus?.api_ready]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     try {
-      const result = await api<{ token: string }>("/auth/login", null, {
-        method: "POST",
-        body: JSON.stringify({ user_id: userId, password }),
-      });
-      onLogin(result.token);
+      const me = await login(userId, password);
+      onLogin(me);
       toast.success("Signed in");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Login failed");
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function submitConfig(event: FormEvent) {
-    event.preventDefault();
-    setSavingConfig(true);
-    try {
-      const status = await saveEnvConfig({
-        database_url: databaseUrl,
-        jwt_secret: jwtSecret,
-        api_addr: apiAddr,
-      });
-      setConfigStatus(status);
-      if (status.configured && status.api_ready) {
-        setChangingConfig(false);
-      }
-      toast.success("Configuration saved");
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Unable to save configuration",
-      );
-    } finally {
-      setSavingConfig(false);
     }
   }
 
@@ -117,99 +48,30 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {showConfigForm ? (
-            <form className="flex flex-col gap-4" onSubmit={submitConfig}>
-              <div className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
-                {configStatus?.configured
-                  ? configStatus.api_error ||
-                    "Settings saved. Starting the GEWT API..."
-                  : "Database settings were not found. Enter them once to continue."}
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="databaseUrl">DATABASE_URL</Label>
-                <Input
-                  id="databaseUrl"
-                  value={databaseUrl}
-                  onChange={(e) => setDatabaseUrl(e.currentTarget.value)}
-                  required
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="jwtSecret">JWT_SECRET</Label>
-                <Input
-                  id="jwtSecret"
-                  type="password"
-                  value={jwtSecret}
-                  onChange={(e) => setJwtSecret(e.currentTarget.value)}
-                  required
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="apiAddr">API_ADDR</Label>
-                <Input
-                  id="apiAddr"
-                  value={apiAddr}
-                  onChange={(e) => setApiAddr(e.currentTarget.value)}
-                  required
-                />
-              </div>
-              <Button type="submit" className="w-full" disabled={savingConfig}>
-                {savingConfig ? "Saving..." : "Save Configuration"}
-              </Button>
-              {!needsConfig && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => setChangingConfig(false)}
-                  disabled={savingConfig}
-                >
-                  Back to sign in
-                </Button>
-              )}
-            </form>
-          ) : (
-            <form className="flex flex-col gap-4" onSubmit={submit}>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="userId">User ID</Label>
-                <Input
-                  id="userId"
-                  value={userId}
-                  onChange={(e) => setUserId(e.currentTarget.value)}
-                  required
-                  disabled={checkingConfig}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="password">Password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.currentTarget.value)}
-                  required
-                  disabled={checkingConfig}
-                />
-              </div>
-              <Button
-                type="submit"
-                className="w-full"
-                disabled={busy || checkingConfig}
-              >
-                {busy ? "Signing in..." : "Sign In"}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                onClick={() => setChangingConfig(true)}
-                disabled={busy || checkingConfig}
-              >
-                <Settings className="size-4" />
-                Change vars
-              </Button>
-            </form>
-          )}
+          <form className="flex flex-col gap-4" onSubmit={submit}>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="userId">User ID</Label>
+              <Input
+                id="userId"
+                value={userId}
+                onChange={(e) => setUserId(e.currentTarget.value)}
+                required
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.currentTarget.value)}
+                required
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={busy}>
+              {busy ? "Signing in..." : "Sign In"}
+            </Button>
+          </form>
         </CardContent>
       </Card>
     </div>

@@ -4,18 +4,22 @@ import "./App.css";
 import { AppShell } from "@/components/app/AppShell";
 import { branchesSeed } from "@/data/seeds";
 import { Admission } from "@/features/admission/Admission";
+import { Backup } from "@/features/backup/Backup";
 import { Login } from "@/features/login/Login";
 import { Outstanding } from "@/features/outstanding/Outstanding";
 import { Promote } from "@/features/promote/Promote";
 import { Receipt } from "@/features/receipt/Receipt";
 import { Students } from "@/features/students/Students";
 import { Utility } from "@/features/utility/Utility";
-import { api, ApiRequestError } from "@/lib/api";
-import { syncAll } from "@/lib/cache";
-import { getEnvConfigStatus } from "@/lib/env-config";
+import { api, currentUser, logout as logoutCommand } from "@/lib/api";
 import type { Branch, Course, Me, Screen } from "@/types";
 
 type Theme = "light" | "dark";
+
+// The session lives in the Rust backend; the frontend only needs a non-empty
+// placeholder to satisfy the feature components' `token` prop (it is ignored by
+// the local command dispatcher).
+const SESSION = "local";
 
 function getInitialTheme(): Theme {
   const savedTheme = localStorage.getItem("gewt-theme");
@@ -28,54 +32,47 @@ function getInitialTheme(): Theme {
     : "light";
 }
 
-function wait(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 function App() {
-  const [token, setToken] = useState(localStorage.getItem("gewt-token"));
   const [me, setMe] = useState<Me | null>(null);
   const [screen, setScreen] = useState<Screen>("admission");
   const [branches, setBranches] = useState<Branch[]>(branchesSeed);
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(false);
-  const [restoringSession, setRestoringSession] = useState(
-    () => Boolean(localStorage.getItem("gewt-token")),
-  );
+  const [restoringSession, setRestoringSession] = useState(true);
   const [screenRefreshKey, setScreenRefreshKey] = useState(0);
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
 
-  async function refresh(session = token, showError = true) {
-    if (!session) return false;
+  async function loadData(profile: Me) {
     setLoading(true);
     try {
-      const [profile, branchList, courseList] = await Promise.all([
-        api<Me>("/auth/me", session),
-        api<Branch[]>("/branches", session),
-        api<Course[]>("/courses", session),
+      const [branchList, courseList] = await Promise.all([
+        api<Branch[]>("/branches", SESSION),
+        api<Course[]>("/courses", SESSION),
       ]);
       setMe(profile);
       setBranches(branchList);
       setCourses(courseList);
-
-      syncAll(session, profile).catch(() =>
-        toast.warning("Sync incomplete — showing cached data"),
-      );
       return true;
     } catch (error) {
-      if (error instanceof ApiRequestError && error.status === 401) {
-        localStorage.removeItem("gewt-token");
-        setToken(null);
-        setMe(null);
-      }
-      if (showError) {
-        toast.error(
-          error instanceof Error ? error.message : "Unable to load GEWT data",
-        );
-      }
+      toast.error(
+        error instanceof Error ? error.message : "Unable to load GEWT data",
+      );
       return false;
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refresh() {
+    try {
+      const profile = await currentUser();
+      if (!profile) {
+        setMe(null);
+        return;
+      }
+      await loadData(profile);
+    } catch {
+      // Ignore — the user can retry.
     }
   }
 
@@ -86,40 +83,15 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-
-    async function restoreSavedSession() {
-      if (!token) {
-        setRestoringSession(false);
-        return;
+    void (async () => {
+      try {
+        const profile = await currentUser();
+        if (cancelled) return;
+        if (profile) await loadData(profile);
+      } finally {
+        if (!cancelled) setRestoringSession(false);
       }
-
-      const configStatus = await getEnvConfigStatus();
-      if (cancelled) return;
-      if (configStatus?.configured === false) {
-        setRestoringSession(false);
-        return;
-      }
-      if (configStatus?.configured && !configStatus.api_ready) {
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-          await wait(250);
-          if (cancelled) return;
-
-          const nextStatus = await getEnvConfigStatus();
-          if (cancelled) return;
-          if (nextStatus?.api_ready || nextStatus?.api_error) {
-            break;
-          }
-        }
-      }
-
-      await refresh(token, false);
-      if (!cancelled) {
-        setRestoringSession(false);
-      }
-    }
-
-    void restoreSavedSession();
-
+    })();
     return () => {
       cancelled = true;
     };
@@ -130,13 +102,12 @@ function App() {
     localStorage.setItem("gewt-theme", theme);
   }, [theme]);
 
-  function logout() {
-    localStorage.removeItem("gewt-token");
-    setToken(null);
+  async function logout() {
+    await logoutCommand().catch(() => {});
     setMe(null);
   }
 
-  if (restoringSession && token && !me) {
+  if (restoringSession && !me) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background p-4">
         <div className="flex flex-col items-center gap-3 text-center">
@@ -149,25 +120,15 @@ function App() {
             <p className="text-sm font-medium text-foreground">
               Opening GEWT Fees
             </p>
-            <p className="text-sm text-muted-foreground">
-              Restoring your session...
-            </p>
+            <p className="text-sm text-muted-foreground">Loading...</p>
           </div>
         </div>
       </div>
     );
   }
 
-  if (!token || !me) {
-    return (
-      <Login
-        onLogin={(nextToken) => {
-          localStorage.setItem("gewt-token", nextToken);
-          setToken(nextToken);
-          void refresh(nextToken);
-        }}
-      />
-    );
+  if (!me) {
+    return <Login onLogin={(profile) => void loadData(profile)} />;
   }
 
   return (
@@ -179,11 +140,11 @@ function App() {
       onScreenChange={setScreen}
       onThemeChange={(isDarkMode) => setTheme(isDarkMode ? "dark" : "light")}
       onRefresh={() => void refreshCurrentScreen()}
-      onLogout={logout}
+      onLogout={() => void logout()}
     >
       {screen === "admission" && (
         <Admission
-          token={token}
+          token={SESSION}
           me={me}
           branches={branches}
           courses={courses}
@@ -192,7 +153,7 @@ function App() {
       )}
       {screen === "receipt" && (
         <Receipt
-          token={token}
+          token={SESSION}
           me={me}
           branches={branches}
           courses={courses}
@@ -201,7 +162,7 @@ function App() {
       )}
       {screen === "promote" && (
         <Promote
-          token={token}
+          token={SESSION}
           me={me}
           branches={branches}
           courses={courses}
@@ -211,7 +172,7 @@ function App() {
       )}
       {screen === "outstanding" && (
         <Outstanding
-          token={token}
+          token={SESSION}
           me={me}
           refreshKey={screenRefreshKey}
           branches={branches}
@@ -220,7 +181,7 @@ function App() {
       )}
       {screen === "students" && (
         <Students
-          token={token}
+          token={SESSION}
           me={me}
           refreshKey={screenRefreshKey}
           branches={branches}
@@ -228,9 +189,10 @@ function App() {
           onSaved={() => void refreshCurrentScreen()}
         />
       )}
+      {screen === "backup" && <Backup me={me} branches={branches} />}
       {screen === "utility" && (
         <Utility
-          token={token}
+          token={SESSION}
           me={me}
           branches={branches}
           courses={courses}

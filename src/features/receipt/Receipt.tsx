@@ -6,7 +6,6 @@ import {
   ImageOff,
   Printer,
   ReceiptText,
-  RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -35,7 +34,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { paymentModes } from "@/data/seeds";
-import { api } from "@/lib/api";
+import { api, previewReceiptNo } from "@/lib/api";
 import {
   cacheReceipt,
   getCachedReceipts,
@@ -57,10 +56,6 @@ import { printPage } from "@/lib/print";
 import { cn } from "@/lib/utils";
 import type { Branch, Course, Me, PaymentMode, Student } from "@/types";
 import { ReceiptPrint, type PrintableReceipt } from "./ReceiptPrint";
-
-type ReceiptRow = {
-  receipt_no: number;
-};
 
 type StudentReceipt = {
   id?: string;
@@ -93,7 +88,6 @@ export function Receipt({
   const [courseId, setCourseId] = useState("");
   const [studentId, setStudentId] = useState("");
   const [receiptNo, setReceiptNo] = useState("");
-  const [generatedReceiptNo, setGeneratedReceiptNo] = useState("");
   const [receiptDate, setReceiptDate] = useState(today());
   const [feeType, setFeeType] = useState<FeeType>("Tuition");
   const [mode, setMode] = useState<PaymentMode>("Cash");
@@ -172,25 +166,16 @@ export function Receipt({
   ]);
 
   async function loadNextReceiptNo() {
+    if (!selectedStudent) {
+      setReceiptNo("");
+      return;
+    }
     try {
-      const next = await api<{ receipt_no: string }>(
-        "/receipts/next-receipt-no",
-        token,
+      setReceiptNo(
+        await previewReceiptNo(selectedStudent.branch_id, receiptDate),
       );
-      setGeneratedReceiptNo(next.receipt_no);
-      setReceiptNo(next.receipt_no);
     } catch {
-      try {
-        const receipts = await api<ReceiptRow[]>("/receipts", token);
-        const nextReceiptNo = String(
-          Math.max(0, ...receipts.map((receipt) => receipt.receipt_no)) + 1,
-        );
-        setGeneratedReceiptNo(nextReceiptNo);
-        setReceiptNo(nextReceiptNo);
-      } catch {
-        setGeneratedReceiptNo("");
-        setReceiptNo("");
-      }
+      setReceiptNo("");
     }
   }
 
@@ -228,9 +213,12 @@ export function Receipt({
     void loadStudents();
   }, [branchScopeId, cacheScope, token, refreshKey]);
 
+  // The receipt number is system-generated as {branch}-{type}-{seq}-{year},
+  // scoped to the selected student's branch and the receipt date's academic year.
   useEffect(() => {
     void loadNextReceiptNo();
-  }, [token]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studentId, receiptDate, students]);
 
   useEffect(() => {
     if (!studentId || !courseId) return;
@@ -457,7 +445,6 @@ export function Receipt({
       toast.success(`Saved Receipt #${savedReceipt.receipt_no}`);
       handlePrint(savedReceipt);
       setReceiptNo("");
-      setGeneratedReceiptNo("");
       void loadNextReceiptNo();
     } catch (error) {
       setStudentReceipts((current) =>
@@ -477,26 +464,11 @@ export function Receipt({
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-2">
                 <Label>Fee Receipt No.</Label>
-                <div className="flex gap-2">
-                  <Input
-                    required
-                    inputMode="numeric"
-                    value={receiptNo}
-                    onChange={(e) => setReceiptNo(e.currentTarget.value)}
-                  />
-                  {generatedReceiptNo && receiptNo !== generatedReceiptNo && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      title="Reset receipt number"
-                      aria-label="Reset receipt number"
-                      onClick={() => setReceiptNo(generatedReceiptNo)}
-                    >
-                      <RotateCcw className="size-4" />
-                    </Button>
-                  )}
-                </div>
+                <Input
+                  value={receiptNo || "Select a student to generate"}
+                  readOnly
+                  disabled
+                />
               </div>
               <div className="flex flex-col gap-2">
                 <Label>Receipt date</Label>

@@ -1,450 +1,393 @@
-mod cache;
+mod backup;
+mod db;
 
-use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqlitePool;
-use std::{
-    collections::HashMap,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Duration,
+use db::{
+    Branch, Course, CourseRequest, Me, OutstandingRow, PromoteRequest, PromoteResponse, Receipt,
+    ReceiptRequest, SettingsRequest, Student, StudentRequest, User, UserRequest,
 };
+use serde::Serialize;
+use sqlx::sqlite::SqlitePool;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 use tauri::Manager;
 use tauri_plugin_updater::UpdaterExt;
 use tokio::sync::RwLock;
 
-const API_BASE: &str = "http://localhost:45123";
-const DEFAULT_API_ADDR: &str = "127.0.0.1:45123";
+/// The authenticated identity for the running app. Held in memory only; closing
+/// the app clears it, so the next launch requires a fresh login.
+#[derive(Clone)]
+struct Session {
+    user_db_id: String,
+    role: String,
+    branch_id: Option<String>,
+}
 
-struct CacheState {
+struct AppState {
     pool: SqlitePool,
-    env_file: PathBuf,
-    api_base: Arc<RwLock<String>>,
-    api_started: Arc<AtomicBool>,
-    api_error: Arc<RwLock<Option<String>>>,
+    db_path: PathBuf,
+    data_dir: PathBuf,
+    session: Arc<RwLock<Option<Session>>>,
 }
 
-#[derive(Debug, Serialize)]
-struct SyncResult {
-    synced_count: i64,
-    is_initial: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct EnvConfigStatus {
-    configured: bool,
-    env_path: String,
-    api_base: String,
-    api_ready: bool,
-    api_error: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct EnvConfigInput {
-    database_url: String,
-    jwt_secret: String,
-    api_addr: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct SyncPage<T> {
-    data: Vec<T>,
-    has_more: bool,
-    next_cursor_updated_at: Option<String>,
-    next_cursor_id: Option<String>,
-    server_time: String,
-}
-
-#[tauri::command]
-async fn sync_courses(
-    state: tauri::State<'_, CacheState>,
-    token: String,
-    scope_key: String,
-) -> Result<SyncResult, String> {
-    let since = cache::get_last_synced(&state.pool, "courses", &scope_key)
-        .await
-        .map_err(|e| e.to_string())?;
-    let is_initial = since.is_none();
-    let client = reqwest::Client::new();
-    let mut total_synced = 0i64;
-    let mut until: Option<String> = None;
-    let mut cursor_updated_at: Option<String> = None;
-    let mut cursor_id: Option<String> = None;
-
-    loop {
-        let api_base = state.api_base.read().await.clone();
-        let mut url = format!("{api_base}/sync/courses?limit=500");
-        append_sync_params(&mut url, &since, &until, &cursor_updated_at, &cursor_id);
-
-        let resp = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .send()
+impl AppState {
+    async fn require_session(&self) -> Result<Session, String> {
+        self.session
+            .read()
             .await
-            .map_err(|e| e.to_string())?;
+            .clone()
+            .ok_or_else(|| "Not signed in".to_string())
+    }
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Sync failed ({status}): {body}"));
+    async fn require_admin(&self) -> Result<Session, String> {
+        let session = self.require_session().await?;
+        if session.role != "admin" {
+            return Err("Admin access required".to_string());
         }
-
-        let sync_page: SyncPage<cache::CachedCourse> =
-            resp.json().await.map_err(|e| e.to_string())?;
-
-        until.get_or_insert_with(|| sync_page.server_time.clone());
-        let count = sync_page.data.len() as i64;
-        if count > 0 {
-            cache::upsert_courses(&state.pool, &sync_page.data)
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-
-        total_synced += count;
-
-        if !sync_page.has_more {
-            break;
-        }
-        cursor_updated_at = sync_page.next_cursor_updated_at;
-        cursor_id = sync_page.next_cursor_id;
+        Ok(session)
     }
-
-    if let Some(server_time) = until {
-        cache::set_last_synced(
-            &state.pool,
-            "courses",
-            &scope_key,
-            &server_time,
-            total_synced,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    }
-
-    Ok(SyncResult {
-        synced_count: total_synced,
-        is_initial,
-    })
 }
 
-#[tauri::command]
-async fn sync_students(
-    state: tauri::State<'_, CacheState>,
-    token: String,
-    scope_key: String,
-) -> Result<SyncResult, String> {
-    let since = cache::get_last_synced(&state.pool, "students", &scope_key)
-        .await
-        .map_err(|e| e.to_string())?;
-    let is_initial = since.is_none();
-    let client = reqwest::Client::new();
-    let mut total_synced = 0i64;
-    let mut until: Option<String> = None;
-    let mut cursor_updated_at: Option<String> = None;
-    let mut cursor_id: Option<String> = None;
-
-    loop {
-        let api_base = state.api_base.read().await.clone();
-        let mut url = format!("{api_base}/sync/students?limit=500");
-        append_sync_params(&mut url, &since, &until, &cursor_updated_at, &cursor_id);
-
-        let resp = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Sync failed ({status}): {body}"));
-        }
-
-        let sync_page: SyncPage<cache::CachedStudent> =
-            resp.json().await.map_err(|e| e.to_string())?;
-
-        until.get_or_insert_with(|| sync_page.server_time.clone());
-        let count = sync_page.data.len() as i64;
-
-        if count > 0 {
-            cache::upsert_students(&state.pool, &sync_page.data)
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-
-        total_synced += count;
-
-        if !sync_page.has_more {
-            break;
-        }
-        cursor_updated_at = sync_page.next_cursor_updated_at;
-        cursor_id = sync_page.next_cursor_id;
+fn ensure_branch(session: &Session, branch_id: &str) -> Result<(), String> {
+    if session.role == "admin" || session.branch_id.as_deref() == Some(branch_id) {
+        Ok(())
+    } else {
+        Err("You don't have access to this branch".to_string())
     }
-
-    if let Some(server_time) = until {
-        cache::set_last_synced(
-            &state.pool,
-            "students",
-            &scope_key,
-            &server_time,
-            total_synced,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    }
-
-    Ok(SyncResult {
-        synced_count: total_synced,
-        is_initial,
-    })
 }
 
-#[tauri::command]
-async fn sync_receipts(
-    state: tauri::State<'_, CacheState>,
-    token: String,
-    scope_key: String,
-) -> Result<SyncResult, String> {
-    let since = cache::get_last_synced(&state.pool, "receipts", &scope_key)
-        .await
-        .map_err(|e| e.to_string())?;
-    let is_initial = since.is_none();
-    let client = reqwest::Client::new();
-    let mut total_synced = 0i64;
-    let mut until: Option<String> = None;
-    let mut cursor_updated_at: Option<String> = None;
-    let mut cursor_id: Option<String> = None;
-
-    loop {
-        let api_base = state.api_base.read().await.clone();
-        let mut url = format!("{api_base}/sync/receipts?limit=500");
-        append_sync_params(&mut url, &since, &until, &cursor_updated_at, &cursor_id);
-
-        let resp = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Sync failed ({status}): {body}"));
-        }
-
-        let sync_page: SyncPage<cache::CachedReceipt> =
-            resp.json().await.map_err(|e| e.to_string())?;
-
-        until.get_or_insert_with(|| sync_page.server_time.clone());
-        let count = sync_page.data.len() as i64;
-
-        if count > 0 {
-            cache::upsert_receipts(&state.pool, &sync_page.data)
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-
-        total_synced += count;
-
-        if !sync_page.has_more {
-            break;
-        }
-        cursor_updated_at = sync_page.next_cursor_updated_at;
-        cursor_id = sync_page.next_cursor_id;
-    }
-
-    if let Some(server_time) = until {
-        cache::set_last_synced(
-            &state.pool,
-            "receipts",
-            &scope_key,
-            &server_time,
-            total_synced,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    }
-
-    Ok(SyncResult {
-        synced_count: total_synced,
-        is_initial,
-    })
-}
-
-#[tauri::command]
-async fn get_cached_courses(
-    state: tauri::State<'_, CacheState>,
-    branch_id: Option<String>,
-) -> Result<Vec<cache::CachedCourse>, String> {
-    cache::get_courses(&state.pool, branch_id.as_deref())
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn get_cached_students(
-    state: tauri::State<'_, CacheState>,
-    branch_id: Option<String>,
-) -> Result<Vec<cache::CachedStudent>, String> {
-    cache::get_students(&state.pool, branch_id.as_deref())
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn get_cached_receipts(
-    state: tauri::State<'_, CacheState>,
-    student_id: Option<String>,
-    branch_id: Option<String>,
-) -> Result<Vec<cache::CachedReceipt>, String> {
-    cache::get_receipts(&state.pool, student_id.as_deref(), branch_id.as_deref())
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn cache_student(
-    state: tauri::State<'_, CacheState>,
-    mut student: serde_json::Value,
-) -> Result<(), String> {
-    if student.get("updated_at").is_none() {
-        student["updated_at"] = serde_json::Value::String(chrono::Utc::now().to_rfc3339());
-    }
-    let parsed: cache::CachedStudent =
-        serde_json::from_value(student).map_err(|e| e.to_string())?;
-    cache::upsert_students(&state.pool, &[parsed])
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn cache_receipt(
-    state: tauri::State<'_, CacheState>,
-    mut receipt: serde_json::Value,
-) -> Result<(), String> {
-    if receipt.get("updated_at").is_none() {
-        receipt["updated_at"] = serde_json::Value::String(chrono::Utc::now().to_rfc3339());
-    }
-    let parsed: cache::CachedReceipt =
-        serde_json::from_value(receipt).map_err(|e| e.to_string())?;
-    cache::upsert_receipts(&state.pool, &[parsed])
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn get_sync_status(
-    state: tauri::State<'_, CacheState>,
-    scope_key: String,
-) -> Result<serde_json::Value, String> {
-    cache::get_sync_status(&state.pool, &scope_key)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn reset_cache(state: tauri::State<'_, CacheState>) -> Result<(), String> {
-    cache::reset_tables(&state.pool)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn get_env_config_status(
-    state: tauri::State<'_, CacheState>,
-) -> Result<EnvConfigStatus, String> {
-    let mut status = env_config_status(&state.env_file).await?;
-    if status.configured {
-        status.api_ready = is_api_ready(&status.api_base).await;
-        if status.api_ready {
-            let mut current_api_error = state.api_error.write().await;
-            *current_api_error = None;
-            status.api_error = None;
-        } else {
-            let existing_error = state.api_error.read().await.clone();
-            if existing_error.is_none() && !state.api_started.load(Ordering::SeqCst) {
-                if let Err(error) = start_embedded_api(
-                    state.env_file.clone(),
-                    Arc::clone(&state.api_base),
-                    Arc::clone(&state.api_started),
-                    Arc::clone(&state.api_error),
-                )
-                .await
-                {
-                    status.api_error = Some(error);
-                }
-                status.api_ready = is_api_ready(&status.api_base).await;
-            }
-
-            if !status.api_ready && status.api_error.is_none() {
-                status.api_error = state.api_error.read().await.clone();
-            }
-        }
-    }
-    Ok(status)
-}
-
-#[tauri::command]
-async fn save_env_config(
-    state: tauri::State<'_, CacheState>,
-    input: EnvConfigInput,
-) -> Result<EnvConfigStatus, String> {
-    let database_url = input.database_url.trim();
-    let jwt_secret = input.jwt_secret.trim();
-    if database_url.is_empty() {
-        return Err("DATABASE_URL is required".to_string());
-    }
-    if jwt_secret.is_empty() {
-        return Err("JWT_SECRET is required".to_string());
-    }
-
-    let api_addr = normalize_api_addr(input.api_addr.as_deref())?;
-    let body = format!(
-        "DATABASE_URL={}\nJWT_SECRET={}\nAPI_ADDR={}\n",
-        dotenv_quote(database_url),
-        dotenv_quote(jwt_secret),
-        dotenv_quote(&api_addr),
-    );
-    std::fs::write(&state.env_file, body).map_err(|e| e.to_string())?;
-
-    let mut status = env_config_status(&state.env_file).await?;
-    {
-        let mut current_api_base = state.api_base.write().await;
-        *current_api_base = status.api_base.clone();
-    }
-    start_embedded_api(
-        state.env_file.clone(),
-        Arc::clone(&state.api_base),
-        Arc::clone(&state.api_started),
-        Arc::clone(&state.api_error),
-    )
-    .await?;
-    status.api_ready = is_api_ready(&status.api_base).await;
-    status.api_error = if status.api_ready {
+/// The branch a non-admin is scoped to (None for admin = all branches).
+fn branch_filter(session: &Session) -> Option<String> {
+    if session.role == "admin" {
         None
     } else {
-        state.api_error.read().await.clone()
-    };
+        session.branch_id.clone()
+    }
+}
 
-    Ok(status)
+// ---------------------------------------------------------------------------
+// Auth commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn login(
+    state: tauri::State<'_, AppState>,
+    user_id: String,
+    password: String,
+) -> Result<Me, String> {
+    let user = db::authenticate(&state.pool, user_id.trim(), &password).await?;
+    let me = db::load_me(&state.pool, &user.id).await?;
+    *state.session.write().await = Some(Session {
+        user_db_id: user.id,
+        role: user.role,
+        branch_id: user.branch_id,
+    });
+    Ok(me)
 }
 
 #[tauri::command]
-async fn get_api_base(state: tauri::State<'_, CacheState>) -> Result<String, String> {
-    Ok(state.api_base.read().await.clone())
+async fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    *state.session.write().await = None;
+    Ok(())
 }
 
-/// Open the OS print dialog for the current page.
-///
-/// On Windows (WebView2) and Linux (WebKitGTK) JavaScript `window.print()`
-/// works, so the frontend calls that directly there. macOS WKWebView ignores
-/// `window.print()` entirely, so we drive the native WKWebView print operation
-/// ourselves (mirrors what wry's `WebView::print` does internally).
+#[tauri::command]
+async fn current_user(state: tauri::State<'_, AppState>) -> Result<Option<Me>, String> {
+    let Some(session) = state.session.read().await.clone() else {
+        return Ok(None);
+    };
+    Ok(Some(db::load_me(&state.pool, &session.user_db_id).await?))
+}
+
+// ---------------------------------------------------------------------------
+// Branches / courses
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_branches(state: tauri::State<'_, AppState>) -> Result<Vec<Branch>, String> {
+    let session = state.require_session().await?;
+    db::list_branches(&state.pool, branch_filter(&session).as_deref()).await
+}
+
+#[tauri::command]
+async fn update_branch(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    code: String,
+) -> Result<Branch, String> {
+    state.require_admin().await?;
+    db::update_branch_code(&state.pool, &id, &code).await
+}
+
+#[tauri::command]
+async fn list_courses(state: tauri::State<'_, AppState>) -> Result<Vec<Course>, String> {
+    let session = state.require_session().await?;
+    db::list_courses(&state.pool, branch_filter(&session).as_deref()).await
+}
+
+#[tauri::command]
+async fn create_course(
+    state: tauri::State<'_, AppState>,
+    req: CourseRequest,
+) -> Result<Course, String> {
+    state.require_admin().await?;
+    db::create_course(&state.pool, req).await
+}
+
+#[tauri::command]
+async fn update_course(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    req: CourseRequest,
+) -> Result<Course, String> {
+    state.require_admin().await?;
+    db::update_course(&state.pool, &id, req).await
+}
+
+// ---------------------------------------------------------------------------
+// Students
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_students(
+    state: tauri::State<'_, AppState>,
+    include_cancelled: Option<bool>,
+) -> Result<Vec<Student>, String> {
+    let session = state.require_session().await?;
+    let include_cancelled = include_cancelled.unwrap_or(false);
+    if include_cancelled && session.role != "admin" {
+        return Err("Admin access required".to_string());
+    }
+    db::list_students(&state.pool, branch_filter(&session).as_deref(), include_cancelled).await
+}
+
+#[tauri::command]
+async fn get_student(state: tauri::State<'_, AppState>, id: String) -> Result<Student, String> {
+    let session = state.require_session().await?;
+    let student = db::load_student(&state.pool, &id).await?;
+    if student.admission_cancelled && session.role != "admin" {
+        return Err("You don't have access to this student".to_string());
+    }
+    ensure_branch(&session, &student.branch_id)?;
+    Ok(student)
+}
+
+#[tauri::command]
+async fn create_student(
+    state: tauri::State<'_, AppState>,
+    req: StudentRequest,
+) -> Result<Student, String> {
+    let session = state.require_session().await?;
+    ensure_branch(&session, &req.branch_id)?;
+    db::create_student(&state.pool, req).await
+}
+
+#[tauri::command]
+async fn update_student(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    req: StudentRequest,
+) -> Result<Student, String> {
+    let session = state.require_session().await?;
+    ensure_branch(&session, &req.branch_id)?;
+    let existing = db::load_student(&state.pool, &id).await?;
+    ensure_branch(&session, &existing.branch_id)?;
+    if existing.admission_cancelled && session.role != "admin" {
+        return Err("You don't have access to this student".to_string());
+    }
+    db::update_student(&state.pool, &id, req).await
+}
+
+#[tauri::command]
+async fn cancel_student(state: tauri::State<'_, AppState>, id: String) -> Result<Student, String> {
+    let session = state.require_admin().await?;
+    db::cancel_student(&state.pool, &id, &session.user_db_id).await
+}
+
+#[tauri::command]
+async fn promote_students(
+    state: tauri::State<'_, AppState>,
+    req: PromoteRequest,
+) -> Result<PromoteResponse, String> {
+    let session = state.require_session().await?;
+    // The course's branch is validated inside db::promote_students; gate access here.
+    let course = db::list_courses(&state.pool, branch_filter(&session).as_deref())
+        .await?
+        .into_iter()
+        .find(|c| c.id == req.course_id)
+        .ok_or_else(|| "Course not found".to_string())?;
+    ensure_branch(&session, &course.branch_id)?;
+    db::promote_students(&state.pool, req).await
+}
+
+#[tauri::command]
+async fn next_form_no(
+    state: tauri::State<'_, AppState>,
+    branch_id: String,
+    date: String,
+) -> Result<String, String> {
+    let session = state.require_session().await?;
+    ensure_branch(&session, &branch_id)?;
+    db::preview_number(&state.pool, &branch_id, "form", &date).await
+}
+
+// ---------------------------------------------------------------------------
+// Receipts
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_receipts(
+    state: tauri::State<'_, AppState>,
+    student_id: Option<String>,
+) -> Result<Vec<Receipt>, String> {
+    let session = state.require_session().await?;
+    db::list_receipts(
+        &state.pool,
+        branch_filter(&session).as_deref(),
+        student_id.as_deref(),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn create_receipt(
+    state: tauri::State<'_, AppState>,
+    req: ReceiptRequest,
+) -> Result<Receipt, String> {
+    let session = state.require_session().await?;
+    let (branch_id, cancelled) = db::student_branch(&state.pool, &req.student_id).await?;
+    if cancelled {
+        return Err("Cannot record a receipt for a cancelled admission".to_string());
+    }
+    ensure_branch(&session, &branch_id)?;
+    db::create_receipt(&state.pool, req, &branch_id).await
+}
+
+#[tauri::command]
+async fn next_receipt_no(
+    state: tauri::State<'_, AppState>,
+    branch_id: String,
+    date: String,
+) -> Result<String, String> {
+    let session = state.require_session().await?;
+    ensure_branch(&session, &branch_id)?;
+    db::preview_number(&state.pool, &branch_id, "receipt", &date).await
+}
+
+#[tauri::command]
+async fn outstanding_report(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<OutstandingRow>, String> {
+    let session = state.require_session().await?;
+    db::outstanding(&state.pool, branch_filter(&session).as_deref()).await
+}
+
+// ---------------------------------------------------------------------------
+// Users / settings (admin)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_users(state: tauri::State<'_, AppState>) -> Result<Vec<User>, String> {
+    state.require_admin().await?;
+    db::list_users(&state.pool).await
+}
+
+#[tauri::command]
+async fn create_user(state: tauri::State<'_, AppState>, req: UserRequest) -> Result<User, String> {
+    state.require_admin().await?;
+    db::create_user(&state.pool, req).await
+}
+
+#[tauri::command]
+async fn update_user(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    req: UserRequest,
+) -> Result<User, String> {
+    state.require_admin().await?;
+    db::update_user(&state.pool, &id, req).await
+}
+
+#[tauri::command]
+async fn update_settings(
+    state: tauri::State<'_, AppState>,
+    req: SettingsRequest,
+) -> Result<Me, String> {
+    let session = state.require_admin().await?;
+    db::update_settings(&state.pool, req).await?;
+    db::load_me(&state.pool, &session.user_db_id).await
+}
+
+// ---------------------------------------------------------------------------
+// Backup / restore / snapshots
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn export_backup(
+    state: tauri::State<'_, AppState>,
+    branch_ids: Vec<String>,
+    dest_path: String,
+) -> Result<(), String> {
+    let session = state.require_session().await?;
+    let branch_ids = if session.role == "admin" {
+        branch_ids
+    } else {
+        // Employees may only export their own branch.
+        match &session.branch_id {
+            Some(b) => vec![b.clone()],
+            None => return Err("No branch assigned".to_string()),
+        }
+    };
+    backup::export_backup(
+        &state.pool,
+        &branch_ids,
+        &session.role,
+        std::path::Path::new(&dest_path),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn import_backup(
+    state: tauri::State<'_, AppState>,
+    src_path: String,
+) -> Result<backup::ImportSummary, String> {
+    let session = state.require_session().await?;
+    let restrict = if session.role == "admin" {
+        None
+    } else {
+        Some(session.branch_id.clone().ok_or_else(|| "No branch assigned".to_string())?)
+    };
+    let summary = backup::import_backup(
+        &state.pool,
+        std::path::Path::new(&src_path),
+        restrict.as_deref(),
+    )
+    .await?;
+    // The imported accounts/branch_id may differ; drop the session to be safe.
+    *state.session.write().await = None;
+    Ok(summary)
+}
+
+#[derive(Serialize)]
+struct SnapshotInfo {
+    path: String,
+}
+
+#[tauri::command]
+async fn create_snapshot(state: tauri::State<'_, AppState>) -> Result<SnapshotInfo, String> {
+    state.require_session().await?;
+    let dir = backup::backups_dir(&state.data_dir);
+    let path = backup::create_snapshot(&state.pool, &state.db_path, &dir).await?;
+    Ok(SnapshotInfo {
+        path: path.display().to_string(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Native printing (macOS WKWebView) — unchanged from the original app
+// ---------------------------------------------------------------------------
+
 #[tauri::command]
 async fn print_page(window: tauri::WebviewWindow) -> Result<(), String> {
     window
@@ -464,35 +407,24 @@ fn macos_print(webview_ptr: *mut std::ffi::c_void) {
         return;
     }
 
-    // Safety: `webview_ptr` is the live WKWebView handed to us by Tauri, and this
-    // runs on the main thread (Tauri dispatches `with_webview` there), which is
-    // required for AppKit print APIs.
     unsafe {
         let webview = &*(webview_ptr as *mut AnyObject);
-
-        // Available macOS 11+; bail gracefully on anything older.
         let can_print: bool =
             msg_send![webview, respondsToSelector: sel!(printOperationWithPrintInfo:)];
         if !can_print {
             return;
         }
-
         let print_info: *mut AnyObject = msg_send![class!(NSPrintInfo), sharedPrintInfo];
-        // Zero the paper margins so the page's own CSS (@page { margin: 0 } plus
-        // the template's padding) controls the layout, matching the receipt.
         let _: () = msg_send![print_info, setTopMargin: 0.0_f64];
         let _: () = msg_send![print_info, setRightMargin: 0.0_f64];
         let _: () = msg_send![print_info, setBottomMargin: 0.0_f64];
         let _: () = msg_send![print_info, setLeftMargin: 0.0_f64];
-
         let operation: *mut AnyObject =
             msg_send![webview, printOperationWithPrintInfo: print_info];
         if operation.is_null() {
             return;
         }
-        // Let the print panel run without blocking the main thread.
         let _: () = msg_send![operation, setCanSpawnSeparateThread: true];
-
         let ns_window: *mut AnyObject = msg_send![webview, window];
         if ns_window.is_null() {
             let _: bool = msg_send![operation, runOperation];
@@ -508,167 +440,14 @@ fn macos_print(webview_ptr: *mut std::ffi::c_void) {
     }
 }
 
-fn append_sync_params(
-    url: &mut String,
-    since: &Option<String>,
-    until: &Option<String>,
-    cursor_updated_at: &Option<String>,
-    cursor_id: &Option<String>,
-) {
-    if let Some(s) = since {
-        url.push_str(&format!("&since={}", urlencoding(s)));
-    }
-    if let Some(s) = until {
-        url.push_str(&format!("&until={}", urlencoding(s)));
-    }
-    if let Some(s) = cursor_updated_at {
-        url.push_str(&format!("&cursor_updated_at={}", urlencoding(s)));
-    }
-    if let Some(s) = cursor_id {
-        url.push_str(&format!("&cursor_id={}", urlencoding(s)));
-    }
-}
-
-fn urlencoding(s: &str) -> String {
-    s.replace('+', "%2B").replace(':', "%3A")
-}
-
-async fn env_config_status(env_file: &Path) -> Result<EnvConfigStatus, String> {
-    let env = read_env_file(env_file).unwrap_or_default();
-    let configured = env
-        .get("DATABASE_URL")
-        .is_some_and(|value| !value.trim().is_empty())
-        && env
-            .get("JWT_SECRET")
-            .is_some_and(|value| !value.trim().is_empty());
-    let api_addr = env
-        .get("API_ADDR")
-        .map(String::as_str)
-        .unwrap_or(DEFAULT_API_ADDR);
-    let api_base = api_base_from_addr(api_addr)?;
-
-    Ok(EnvConfigStatus {
-        configured,
-        env_path: env_file.display().to_string(),
-        api_base,
-        api_ready: false,
-        api_error: None,
-    })
-}
-
-fn read_env_file(env_file: &Path) -> Result<HashMap<String, String>, String> {
-    if !env_file.exists() {
-        return Ok(HashMap::new());
-    }
-
-    let mut env = HashMap::new();
-    for item in dotenvy::from_path_iter(env_file).map_err(|e| e.to_string())? {
-        let (key, value) = item.map_err(|e| e.to_string())?;
-        env.insert(key, value);
-    }
-    Ok(env)
-}
-
-fn normalize_api_addr(api_addr: Option<&str>) -> Result<String, String> {
-    let raw = api_addr
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_API_ADDR);
-    raw.parse::<SocketAddr>()
-        .map_err(|_| "API_ADDR must look like 127.0.0.1:45123".to_string())?;
-    Ok(raw.to_string())
-}
-
-fn api_base_from_addr(api_addr: &str) -> Result<String, String> {
-    let addr = normalize_api_addr(Some(api_addr))?;
-    let socket_addr = addr
-        .parse::<SocketAddr>()
-        .map_err(|_| "API_ADDR must look like 127.0.0.1:45123".to_string())?;
-    let host = match socket_addr.ip() {
-        IpAddr::V4(ip) if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST).to_string(),
-        IpAddr::V6(ip) if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST).to_string(),
-        IpAddr::V6(ip) => format!("[{ip}]"),
-        ip => ip.to_string(),
-    };
-    Ok(format!("http://{host}:{}", socket_addr.port()))
-}
-
-fn dotenv_quote(value: &str) -> String {
-    let escaped = value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n");
-    format!("\"{escaped}\"")
-}
-
-async fn start_embedded_api(
-    env_file: PathBuf,
-    api_base: Arc<RwLock<String>>,
-    api_started: Arc<AtomicBool>,
-    api_error: Arc<RwLock<Option<String>>>,
-) -> Result<(), String> {
-    let status = env_config_status(&env_file).await?;
-    if !status.configured {
-        return Err("DATABASE_URL and JWT_SECRET must be configured first".to_string());
-    }
-
-    {
-        let mut current_api_base = api_base.write().await;
-        *current_api_base = status.api_base;
-    }
-    {
-        let mut current_api_error = api_error.write().await;
-        *current_api_error = None;
-    }
-
-    if api_started
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return Ok(());
-    }
-
-    let api_start_error = Arc::clone(&api_error);
-    tauri::async_runtime::spawn(async move {
-        if let Err(error) = gewt_api::run_with_env_file(Some(env_file)).await {
-            let mut current_api_error = api_start_error.write().await;
-            *current_api_error = Some(error.to_string());
-            api_started.store(false, Ordering::SeqCst);
-            eprintln!("GEWT API failed to start: {error:#}");
-        }
-    });
-
-    let readiness_api_base = api_base.read().await.clone();
-    let readiness_error = Arc::clone(&api_error);
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(20)).await;
-        if !is_api_ready(&readiness_api_base).await {
-            let mut current_api_error = readiness_error.write().await;
-            if current_api_error.is_none() {
-                *current_api_error = Some(
-                    "GEWT API did not become ready. Check PostgreSQL is running and DATABASE_URL is reachable."
-                        .to_string(),
-                );
-            }
-        }
-    });
-
-    Ok(())
-}
-
-async fn is_api_ready(api_base: &str) -> bool {
-    reqwest::Client::new()
-        .get(format!("{api_base}/health"))
-        .send()
-        .await
-        .is_ok_and(|response| response.status().is_success())
-}
+// ---------------------------------------------------------------------------
+// Updater (GitHub releases) — kept; downloads only app binaries, no data.
+// ---------------------------------------------------------------------------
 
 async fn install_startup_update<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
     if cfg!(debug_assertions) {
         return false;
     }
-
     let updater = match app
         .updater_builder()
         .timeout(Duration::from_secs(10))
@@ -680,7 +459,6 @@ async fn install_startup_update<R: tauri::Runtime>(app: &tauri::AppHandle<R>) ->
             return false;
         }
     };
-
     let update = match updater.check().await {
         Ok(update) => update,
         Err(error) => {
@@ -688,16 +466,10 @@ async fn install_startup_update<R: tauri::Runtime>(app: &tauri::AppHandle<R>) ->
             return false;
         }
     };
-
     let Some(update) = update else {
         return false;
     };
-
-    eprintln!(
-        "GEWT update {} is available. Installing before API startup.",
-        update.version
-    );
-
+    eprintln!("GEWT update {} is available. Installing.", update.version);
     match update.download_and_install(|_, _| {}, || {}).await {
         Ok(()) => true,
         Err(error) => {
@@ -711,6 +483,7 @@ async fn install_startup_update<R: tauri::Runtime>(app: &tauri::AppHandle<R>) ->
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
@@ -721,59 +494,202 @@ pub fn run() {
                 app.handle().restart();
             }
 
-            let config_dir = app.path().app_config_dir()?;
-            std::fs::create_dir_all(&config_dir)?;
-            let env_file = config_dir.join(".env");
-
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            let db_path = db::db_file(&data_dir);
 
-            let pool = tauri::async_runtime::block_on(async { cache::init_db(&data_dir).await })
-                .map_err(|e| Box::new(std::io::Error::other(e.to_string())))?;
-
-            let api_base = Arc::new(RwLock::new(API_BASE.to_string()));
-            let api_started = Arc::new(AtomicBool::new(false));
-            let api_error = Arc::new(RwLock::new(None));
-
-            app.manage(CacheState {
-                pool,
-                env_file: env_file.clone(),
-                api_base: Arc::clone(&api_base),
-                api_started: Arc::clone(&api_started),
-                api_error: Arc::clone(&api_error),
-            });
-
-            let should_start_api = tauri::async_runtime::block_on(async {
-                env_config_status(&env_file)
-                    .await
-                    .map(|status| status.configured)
-                    .unwrap_or(false)
-            });
-            if should_start_api {
-                tauri::async_runtime::block_on(async {
-                    start_embedded_api(env_file, api_base, api_started, api_error).await
-                })
+            let pool = tauri::async_runtime::block_on(async { db::init_db(&data_dir).await })
                 .map_err(|e| Box::new(std::io::Error::other(e)))?;
+
+            // Take a safety snapshot on launch if the last one is older than ~24h.
+            {
+                let pool = pool.clone();
+                let db_path = db_path.clone();
+                let dir = backup::backups_dir(&data_dir);
+                if backup::needs_daily_snapshot(&dir) {
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = backup::create_snapshot(&pool, &db_path, &dir).await {
+                            eprintln!("GEWT launch snapshot failed: {e}");
+                        }
+                    });
+                }
             }
 
+            app.manage(AppState {
+                pool,
+                db_path,
+                data_dir,
+                session: Arc::new(RwLock::new(None)),
+            });
             Ok(())
         })
+        .on_window_event(|window, event| {
+            // Take a local safety snapshot when the main window closes.
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if let Some(state) = window.app_handle().try_state::<AppState>() {
+                    let pool = state.pool.clone();
+                    let db_path = state.db_path.clone();
+                    let dir = backup::backups_dir(&state.data_dir);
+                    let _ = tauri::async_runtime::block_on(async {
+                        backup::create_snapshot(&pool, &db_path, &dir).await
+                    });
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
-            get_env_config_status,
-            save_env_config,
-            get_api_base,
+            login,
+            logout,
+            current_user,
+            list_branches,
+            update_branch,
+            list_courses,
+            create_course,
+            update_course,
+            list_students,
+            get_student,
+            create_student,
+            update_student,
+            cancel_student,
+            promote_students,
+            next_form_no,
+            list_receipts,
+            create_receipt,
+            next_receipt_no,
+            outstanding_report,
+            list_users,
+            create_user,
+            update_user,
+            update_settings,
+            export_backup,
+            import_backup,
+            create_snapshot,
             print_page,
-            sync_courses,
-            sync_students,
-            sync_receipts,
-            get_cached_courses,
-            get_cached_students,
-            get_cached_receipts,
-            cache_student,
-            cache_receipt,
-            get_sync_status,
-            reset_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod smoke_tests {
+    use crate::backup;
+    use crate::db::{self, CourseRequest, ReceiptRequest, StudentRequest};
+
+    const PRT: &str = "11111111-1111-1111-1111-111111111111";
+    const HMT: &str = "22222222-2222-2222-2222-222222222222";
+
+    fn student_req(branch: &str, course: &str, date: &str, fee: f64) -> StudentRequest {
+        StudentRequest {
+            admission_date: date.into(),
+            branch_id: branch.into(),
+            course_id: course.into(),
+            student_name: "Test Student".into(),
+            category: "General".into(),
+            religion: String::new(),
+            caste: String::new(),
+            gender: "Male".into(),
+            aadhar: String::new(),
+            address: String::new(),
+            student_phone: String::new(),
+            parent_phone: String::new(),
+            fee_year_1: fee,
+            fee_year_2: 0.0,
+            fee_year_3: 0.0,
+            fee_year_4: 0.0,
+            tuition_fee_year_1: None,
+            tuition_fee_year_2: None,
+            tuition_fee_year_3: None,
+            tuition_fee_year_4: None,
+            other_fee_year_1: None,
+            other_fee_year_2: None,
+            other_fee_year_3: None,
+            other_fee_year_4: None,
+            current_course_period: None,
+        }
+    }
+
+    fn course_req(branch: &str, name: &str) -> CourseRequest {
+        CourseRequest {
+            branch_id: branch.into(),
+            name: name.into(),
+            duration: 3,
+            duration_type: "year".into(),
+            letterhead: None,
+        }
+    }
+
+    async fn run() -> Result<(), String> {
+        let tmp = std::env::temp_dir().join(format!("gewt-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let pool = db::init_db(&tmp).await?;
+
+        let course = db::create_course(&pool, course_req(PRT, "BCA")).await?;
+
+        // Numbering: per-branch, per-academic-year sequence with annual reset.
+        let s1 = db::create_student(&pool, student_req(PRT, &course.id, "2026-09-01", 1000.0)).await?;
+        let s2 = db::create_student(&pool, student_req(PRT, &course.id, "2026-09-05", 1000.0)).await?;
+        let s3 = db::create_student(&pool, student_req(PRT, &course.id, "2025-06-01", 1000.0)).await?;
+        assert_eq!(s1.form_no, "PRT-11-1-2026", "first form no");
+        assert_eq!(s2.form_no, "PRT-11-2-2026", "second form no increments");
+        assert_eq!(s3.form_no, "PRT-11-1-2024", "resets in a different academic year");
+
+        let receipt = db::create_receipt(
+            &pool,
+            ReceiptRequest {
+                student_id: s1.id.clone(),
+                receipt_date: "2026-09-02".into(),
+                fee_type: "Tuition".into(),
+                amount_paid: 500.0,
+                payment_mode: "Cash".into(),
+                reference_no: None,
+            },
+            PRT,
+        )
+        .await?;
+        assert_eq!(receipt.receipt_no, "PRT-12-1-2026", "receipt numbering");
+
+        // Outstanding: s3 has no receipts, so its first billed period is pending.
+        let outstanding = db::outstanding(&pool, None).await?;
+        assert!(
+            outstanding.iter().any(|r| r.student.id == s3.id && r.pending > 0.0),
+            "s3 should have a pending balance"
+        );
+
+        // Export PRT only.
+        let backup_file = tmp.join("prt.gewtbak");
+        backup::export_backup(&pool, &[PRT.into()], "admin", &backup_file).await?;
+
+        // Second machine: pre-seed an HMT student, then import the PRT file.
+        let tmp2 = std::env::temp_dir().join(format!("gewt-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp2).unwrap();
+        let pool2 = db::init_db(&tmp2).await?;
+        let hmt_course = db::create_course(&pool2, course_req(HMT, "BBA")).await?;
+        let hmt_student =
+            db::create_student(&pool2, student_req(HMT, &hmt_course.id, "2026-09-01", 500.0)).await?;
+
+        let summary = backup::import_backup(&pool2, &backup_file, None).await?;
+        assert_eq!(summary.students, 3, "imported 3 PRT students");
+
+        let students2 = db::list_students(&pool2, None, false).await?;
+        // Branch-partitioned: PRT students arrived, HMT student untouched.
+        assert!(
+            students2.iter().any(|s| s.form_no == "PRT-11-1-2026"),
+            "PRT student present after import"
+        );
+        assert!(
+            students2.iter().any(|s| s.id == hmt_student.id),
+            "HMT student preserved (branch-partitioned import)"
+        );
+
+        // Re-importing must not duplicate (branch replace).
+        backup::import_backup(&pool2, &backup_file, None).await?;
+        let prt_count = db::list_students(&pool2, Some(PRT), true).await?.len();
+        assert_eq!(prt_count, 3, "re-import replaces, does not duplicate");
+
+        Ok(())
+    }
+
+    #[test]
+    fn local_db_smoke() {
+        tauri::async_runtime::block_on(run()).expect("smoke test failed");
+    }
 }
