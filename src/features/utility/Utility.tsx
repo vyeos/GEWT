@@ -2,6 +2,8 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
   GraduationCap,
+  ImageIcon,
+  ImageOff,
   KeyRound,
   Pencil,
   Plus,
@@ -474,19 +476,51 @@ export function Utility({
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-                {letterheads.length === 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    Drop letterhead images into public/letterheads/, then restart
-                    the app.
-                  </p>
-                )}
-                {course.letterhead && (
-                  <img
-                    src={letterheadSrc(course.letterhead)}
-                    alt="Letterhead preview"
-                    className="mt-1 max-h-40 w-full rounded-md border object-contain"
-                  />
-                )}
+                <div className="mt-1 flex flex-col gap-4 sm:flex-row sm:items-stretch">
+                  <div className="flex aspect-[1/1.414] w-full max-w-[10rem] shrink-0 items-center justify-center rounded-lg border border-dashed bg-muted/30 p-3">
+                    {course.letterhead ? (
+                      <img
+                        src={letterheadSrc(course.letterhead)}
+                        alt="Letterhead preview"
+                        className="max-h-full w-auto max-w-full rounded-md border bg-white object-contain shadow-sm"
+                      />
+                    ) : letterheads.length === 0 ? (
+                      <ImageOff className="size-7 text-muted-foreground/60" />
+                    ) : (
+                      <ImageIcon className="size-7 text-muted-foreground/60" />
+                    )}
+                  </div>
+                  <div className="flex flex-col justify-center gap-1 text-sm">
+                    {course.letterhead ? (
+                      <>
+                        <p className="font-medium">Letterhead selected</p>
+                        <p className="text-muted-foreground">
+                          Receipts and admission forms for this course will print
+                          on the letterhead shown here.
+                        </p>
+                      </>
+                    ) : letterheads.length === 0 ? (
+                      <>
+                        <p className="font-medium">No letterheads available</p>
+                        <p className="text-muted-foreground">
+                          Drop letterhead images into{" "}
+                          <code className="rounded bg-muted px-1 py-0.5 text-xs">
+                            public/letterheads/
+                          </code>
+                          , then restart the app.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="font-medium">No letterhead selected</p>
+                        <p className="text-muted-foreground">
+                          Pick a letterhead above to brand this course's printed
+                          documents, or leave it as None.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </div>
               </div>
               <DialogFooter className="pt-2">
                 <Button
