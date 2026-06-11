@@ -202,8 +202,26 @@
 }
 
 @media print {
+  /* The print templates (#receipt-print / #admission-print) are portaled to
+     <body>, so they are siblings of #root rather than buried inside the tall,
+     scrolling app shell. Removing #root entirely from the print leaves exactly
+     one A4 box as the only content — nothing else can paginate, so no trailing
+     blank page. `visibility: hidden` is kept as a belt-and-braces guard for any
+     other body-level portals (e.g. toasts). */
+  html,
+  body {
+    width: 210mm;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: #fff;
+  }
   body * {
     visibility: hidden;
+  }
+  #root {
+    display: none;
   }
   #receipt-print,
   #receipt-print *,
@@ -217,9 +235,16 @@
     position: absolute;
     left: 0;
     top: 0;
-    width: 100%;
+    width: 210mm;
+    /* Shave 1px off the exact A4 height: a box that is *exactly* 297mm tall
+       rounds up to 1px past the printable area in WebKit/Chrome and spills onto
+       a blank 2nd page. */
+    height: calc(297mm - 1px);
+    overflow: hidden;
     color: #000;
     background: #fff;
+    page-break-after: avoid;
+    page-break-inside: avoid;
   }
   @page {
     size: A4;

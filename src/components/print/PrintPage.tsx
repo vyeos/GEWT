@@ -25,6 +25,9 @@ export function PrintPage({
       <img
         src={letterheadSrc(letterhead)}
         alt=""
+        // Fill the page exactly. No bleed: any overflow past 297mm makes WebKit's
+        // print engine fragment the oversized box onto a blank 2nd page (the
+        // page box is clamped to A4 in App.css, so the four edges already meet it).
         className="absolute inset-0 h-full w-full object-fill"
         onError={(e) => {
           if (e.currentTarget.src.endsWith(LETTERHEAD_FALLBACK)) return;

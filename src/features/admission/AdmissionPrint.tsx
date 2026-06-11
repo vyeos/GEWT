@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { money } from "@/lib/format";
 import { getCourseDuration } from "@/lib/course-duration";
 import { PrintPage } from "@/components/print/PrintPage";
@@ -31,14 +32,15 @@ export function AdmissionPrint({
   course: Course | undefined;
   branch: Branch | undefined;
 }) {
-  if (!admission) return <div id="admission-print" />;
+  if (!admission)
+    return createPortal(<div id="admission-print" />, document.body);
 
   const courseLine = course
     ? `${course.name}${branch ? ` — ${branch.name}` : ""}`
     : "";
   const duration = course ? getCourseDuration(course).label : "";
 
-  return (
+  return createPortal(
     <div id="admission-print">
       <PrintPage letterhead={course?.letterhead}>
         <div className="mb-4 text-center text-lg font-semibold uppercase tracking-wide">
@@ -120,7 +122,8 @@ export function AdmissionPrint({
           </div>
         </div>
       </PrintPage>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

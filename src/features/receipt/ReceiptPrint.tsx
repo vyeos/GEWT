@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { amountInWords, money } from "@/lib/format";
 import { formatCourseYear, getCurrentCourseYear } from "@/lib/course-duration";
 import { PrintPage } from "@/components/print/PrintPage";
@@ -25,11 +26,12 @@ export function ReceiptPrint({
   receipt: PrintableReceipt | null;
   academicYearStartMonth: number;
 }) {
-  if (!student || !receipt) return <div id="receipt-print" />;
+  if (!student || !receipt)
+    return createPortal(<div id="receipt-print" />, document.body);
 
   const year = getCurrentCourseYear(student, academicYearStartMonth);
 
-  return (
+  return createPortal(
     <div id="receipt-print">
       <PrintPage letterhead={course?.letterhead}>
         <div className="mb-6 text-center text-lg font-semibold uppercase tracking-wide">
@@ -98,7 +100,8 @@ export function ReceiptPrint({
           </div>
         </div>
       </PrintPage>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
