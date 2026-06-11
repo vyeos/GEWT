@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   ChevronsUpDown,
+  ImageIcon,
+  ImageOff,
   Printer,
   ReceiptText,
   RotateCcw,
@@ -744,16 +746,59 @@ export function Receipt({
               </div>
             </div>
 
-            {previewCourse?.letterhead && (
-              <div className="flex flex-col gap-2">
-                <Label>Letterhead</Label>
-                <img
-                  src={letterheadSrc(previewCourse.letterhead)}
-                  alt="Letterhead preview"
-                  className="max-h-40 w-full rounded-md border object-contain"
-                />
+            <div className="flex flex-col gap-2">
+              <Label>Letterhead</Label>
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-stretch">
+                <div className="flex aspect-[1/1.414] w-full max-w-[12rem] shrink-0 items-center justify-center rounded-lg border border-dashed bg-muted/30 p-3">
+                  {previewCourse?.letterhead ? (
+                    <img
+                      src={letterheadSrc(previewCourse.letterhead)}
+                      alt={`${previewCourse.name} letterhead preview`}
+                      className="max-h-full w-auto max-w-full rounded-md border bg-white object-contain shadow-sm"
+                    />
+                  ) : previewCourse ? (
+                    <ImageOff className="size-7 text-muted-foreground/60" />
+                  ) : (
+                    <ImageIcon className="size-7 text-muted-foreground/60" />
+                  )}
+                </div>
+                <div className="flex flex-col justify-center gap-1 text-sm">
+                  {previewCourse?.letterhead ? (
+                    <>
+                      <p className="font-medium">
+                        Receipts print on this letterhead
+                      </p>
+                      <p className="text-muted-foreground">
+                        The{" "}
+                        <span className="font-medium text-foreground">
+                          {previewCourse.name}
+                        </span>{" "}
+                        letterhead shown here is applied to the printed receipt.
+                      </p>
+                    </>
+                  ) : previewCourse ? (
+                    <>
+                      <p className="font-medium">No letterhead yet</p>
+                      <p className="text-muted-foreground">
+                        <span className="font-medium text-foreground">
+                          {previewCourse.name}
+                        </span>{" "}
+                        has no letterhead, so receipts print without branding.
+                        Add one from the Utility page.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="font-medium">Preview the letterhead</p>
+                      <p className="text-muted-foreground">
+                        Select a course to preview the letterhead receipts will
+                        print on.
+                      </p>
+                    </>
+                  )}
+                </div>
               </div>
-            )}
+            </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
               <div className="flex flex-col gap-2">
