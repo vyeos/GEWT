@@ -239,19 +239,23 @@
     left: 0;
     top: 0;
     width: 210mm;
-    /* Shave 1px off the exact A4 height: a box that is *exactly* 297mm tall
-       rounds up to 1px past the printable area in WebKit/Chrome and spills onto
-       a blank 2nd page. */
-    height: calc(297mm - 1px);
     overflow: hidden;
     color: #000;
     background: #fff;
     page-break-after: avoid;
     page-break-inside: avoid;
   }
+  #receipt-print {
+    /* Receipts are cut/kept as half-A4 slips. Shave 1px off exact physical
+       dimensions so WebKit/Chrome do not round the box onto a blank 2nd page. */
+    height: calc(148.5mm - 1px);
+  }
+  #admission-print {
+    /* Admission forms stay full A4. */
+    height: calc(297mm - 1px);
+  }
   @page {
     size: A4;
     margin: 0;
   }
 }
-

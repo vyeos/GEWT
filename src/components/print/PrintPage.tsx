@@ -16,10 +16,14 @@ import type { Course } from "@/types";
  */
 export function PrintPage({
   letterhead,
+  pageClassName,
+  letterheadClassName,
   contentClassName,
   children,
 }: {
   letterhead: Course["letterhead"] | undefined;
+  pageClassName?: string;
+  letterheadClassName?: string;
   contentClassName?: string;
   children: ReactNode;
 }) {
@@ -30,7 +34,12 @@ export function PrintPage({
   }, [letterhead]);
 
   return (
-    <div className="relative h-[297mm] w-[210mm] overflow-hidden bg-white font-['Geist',Arial,sans-serif] text-black">
+    <div
+      className={cn(
+        "relative h-[297mm] w-[210mm] overflow-hidden bg-white font-['Geist',Arial,sans-serif] text-black",
+        pageClassName,
+      )}
+    >
       <img
         src={letterheadSrc(letterhead)}
         alt=""
@@ -40,6 +49,7 @@ export function PrintPage({
         className={cn(
           "absolute inset-0 h-full w-full object-fill",
           usingFallback && "opacity-5",
+          letterheadClassName,
         )}
         onError={(e) => {
           if (e.currentTarget.src.endsWith(LETTERHEAD_FALLBACK)) return;
