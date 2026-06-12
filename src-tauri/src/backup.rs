@@ -37,7 +37,21 @@ struct RawUser {
     role: String,
     branch_id: Option<String>,
     active: i64,
+    #[serde(default = "default_permission")]
+    can_admission: i64,
+    #[serde(default = "default_permission")]
+    can_receipt: i64,
+    #[serde(default = "default_permission")]
+    can_outstanding: i64,
+    #[serde(default = "default_permission")]
+    can_students: i64,
+    #[serde(default = "default_permission")]
+    can_promote: i64,
     updated_at: String,
+}
+
+fn default_permission() -> i64 {
+    1
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -74,7 +88,14 @@ struct RawStudent {
     caste: String,
     gender: String,
     aadhar: String,
+    #[serde(default)]
     address: String,
+    #[serde(default)]
+    district: String,
+    #[serde(default)]
+    taluka: String,
+    #[serde(default)]
+    pincode: String,
     student_phone: String,
     parent_phone: String,
     fee_year_1: f64,
@@ -137,8 +158,6 @@ struct RawSequence {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct RawSettings {
     academic_year_start_month: i64,
-    form_type_code: String,
-    receipt_type_code: String,
     updated_at: String,
 }
 
@@ -154,74 +173,109 @@ macro_rules! impl_from_row {
     };
 }
 
-impl_from_row!(RawBranch { id, code, name, updated_at });
-impl_from_row!(RawUser { id, user_id, name, password_hash, role, branch_id, active, updated_at });
-impl_from_row!(RawCourse { id, branch_id, name, duration, duration_type, letterhead, active, updated_at });
-impl_from_row!(
-    RawStudent {
-        id,
-        form_seq,
-        form_year,
-        form_no,
-        admission_date,
-        branch_id,
-        course_id,
-        student_name,
-        surname,
-        father_name,
-        category,
-        religion,
-        caste,
-        gender,
-        aadhar,
-        address,
-        student_phone,
-        parent_phone,
-        fee_year_1,
-        fee_year_2,
-        fee_year_3,
-        fee_year_4,
-        tuition_fee_year_1,
-        tuition_fee_year_2,
-        tuition_fee_year_3,
-        tuition_fee_year_4,
-        other_fee_year_1,
-        other_fee_year_2,
-        other_fee_year_3,
-        other_fee_year_4,
-        current_course_year,
-        current_course_period,
-        admission_cancelled,
-        admission_cancelled_at,
-        admission_cancelled_by,
-        created_by,
-        created_at,
-        updated_at,
-    }
-);
-impl_from_row!(
-    RawReceipt {
-        id,
-        receipt_seq,
-        receipt_year,
-        receipt_no,
-        receipt_date,
-        student_id,
-        branch_id,
-        fee_type,
-        amount_paid,
-        payment_mode,
-        reference_no,
-        cancelled,
-        cancelled_at,
-        cancelled_by,
-        created_by,
-        created_at,
-        updated_at,
-    }
-);
-impl_from_row!(RawSequence { branch_id, doc_type, academic_year, last_value });
-impl_from_row!(RawSettings { academic_year_start_month, form_type_code, receipt_type_code, updated_at });
+impl_from_row!(RawBranch {
+    id,
+    code,
+    name,
+    updated_at
+});
+impl_from_row!(RawUser {
+    id,
+    user_id,
+    name,
+    password_hash,
+    role,
+    branch_id,
+    active,
+    can_admission,
+    can_receipt,
+    can_outstanding,
+    can_students,
+    can_promote,
+    updated_at
+});
+impl_from_row!(RawCourse {
+    id,
+    branch_id,
+    name,
+    duration,
+    duration_type,
+    letterhead,
+    active,
+    updated_at
+});
+impl_from_row!(RawStudent {
+    id,
+    form_seq,
+    form_year,
+    form_no,
+    admission_date,
+    branch_id,
+    course_id,
+    student_name,
+    surname,
+    father_name,
+    category,
+    religion,
+    caste,
+    gender,
+    aadhar,
+    address,
+    district,
+    taluka,
+    pincode,
+    student_phone,
+    parent_phone,
+    fee_year_1,
+    fee_year_2,
+    fee_year_3,
+    fee_year_4,
+    tuition_fee_year_1,
+    tuition_fee_year_2,
+    tuition_fee_year_3,
+    tuition_fee_year_4,
+    other_fee_year_1,
+    other_fee_year_2,
+    other_fee_year_3,
+    other_fee_year_4,
+    current_course_year,
+    current_course_period,
+    admission_cancelled,
+    admission_cancelled_at,
+    admission_cancelled_by,
+    created_by,
+    created_at,
+    updated_at,
+});
+impl_from_row!(RawReceipt {
+    id,
+    receipt_seq,
+    receipt_year,
+    receipt_no,
+    receipt_date,
+    student_id,
+    branch_id,
+    fee_type,
+    amount_paid,
+    payment_mode,
+    reference_no,
+    cancelled,
+    cancelled_at,
+    cancelled_by,
+    created_by,
+    created_at,
+    updated_at,
+});
+impl_from_row!(RawSequence {
+    branch_id,
+    doc_type,
+    academic_year,
+    last_value
+});
+impl_from_row!(RawSettings {
+    academic_year_start_month,
+    updated_at
+});
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ConfigSnapshot {
@@ -257,9 +311,7 @@ pub struct ImportSummary {
 }
 
 fn placeholders(n: usize) -> String {
-    std::iter::repeat_n("?", n)
-        .collect::<Vec<_>>()
-        .join(", ")
+    std::iter::repeat_n("?", n).collect::<Vec<_>>().join(", ")
 }
 
 /// Export the given branches to a `.gewtbak` file at `dest`.
@@ -275,7 +327,7 @@ pub async fn export_backup(
     let in_clause = placeholders(branch_ids.len());
 
     let settings: RawSettings = sqlx::query_as(
-        "SELECT academic_year_start_month, form_type_code, receipt_type_code, updated_at FROM academic_settings WHERE id = 1",
+        "SELECT academic_year_start_month, updated_at FROM academic_settings WHERE id = 1",
     )
     .fetch_one(pool)
     .await
@@ -294,12 +346,12 @@ pub async fn export_backup(
     // user a file full of admin password hashes would invite offline cracking.
     let acct_sql = if origin_role == "admin" {
         format!(
-            "SELECT id, user_id, name, password_hash, role, branch_id, active, updated_at
+            "SELECT id, user_id, name, password_hash, role, branch_id, active, can_admission, can_receipt, can_outstanding, can_students, can_promote, updated_at
              FROM users WHERE role = 'admin' OR branch_id IN ({in_clause})"
         )
     } else {
         format!(
-            "SELECT id, user_id, name, password_hash, role, branch_id, active, updated_at
+            "SELECT id, user_id, name, password_hash, role, branch_id, active, can_admission, can_receipt, can_outstanding, can_students, can_promote, updated_at
              FROM users WHERE role = 'employee' AND branch_id IN ({in_clause})"
         )
     };
@@ -337,7 +389,11 @@ pub async fn export_backup(
     Ok(())
 }
 
-async fn fetch_courses(pool: &SqlitePool, ids: &[String], in_clause: &str) -> BackupResult<Vec<RawCourse>> {
+async fn fetch_courses(
+    pool: &SqlitePool,
+    ids: &[String],
+    in_clause: &str,
+) -> BackupResult<Vec<RawCourse>> {
     let sql = format!(
         "SELECT id, branch_id, name, duration, duration_type, letterhead, active, updated_at FROM courses WHERE branch_id IN ({in_clause})"
     );
@@ -348,9 +404,13 @@ async fn fetch_courses(pool: &SqlitePool, ids: &[String], in_clause: &str) -> Ba
     q.fetch_all(pool).await.map_err(|e| e.to_string())
 }
 
-async fn fetch_students(pool: &SqlitePool, ids: &[String], in_clause: &str) -> BackupResult<Vec<RawStudent>> {
+async fn fetch_students(
+    pool: &SqlitePool,
+    ids: &[String],
+    in_clause: &str,
+) -> BackupResult<Vec<RawStudent>> {
     let sql = format!(
-        "SELECT id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone,
+        "SELECT id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, district, taluka, pincode, student_phone, parent_phone,
             fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4,
             current_course_year, current_course_period, admission_cancelled, admission_cancelled_at, admission_cancelled_by, created_by, created_at, updated_at
          FROM students WHERE branch_id IN ({in_clause})"
@@ -362,7 +422,11 @@ async fn fetch_students(pool: &SqlitePool, ids: &[String], in_clause: &str) -> B
     q.fetch_all(pool).await.map_err(|e| e.to_string())
 }
 
-async fn fetch_receipts(pool: &SqlitePool, ids: &[String], in_clause: &str) -> BackupResult<Vec<RawReceipt>> {
+async fn fetch_receipts(
+    pool: &SqlitePool,
+    ids: &[String],
+    in_clause: &str,
+) -> BackupResult<Vec<RawReceipt>> {
     let sql = format!(
         "SELECT id, receipt_seq, receipt_year, receipt_no, receipt_date, student_id, branch_id, fee_type, amount_paid, payment_mode, reference_no, cancelled, cancelled_at, cancelled_by, created_by, created_at, updated_at
          FROM receipts WHERE branch_id IN ({in_clause})"
@@ -374,7 +438,11 @@ async fn fetch_receipts(pool: &SqlitePool, ids: &[String], in_clause: &str) -> B
     q.fetch_all(pool).await.map_err(|e| e.to_string())
 }
 
-async fn fetch_sequences(pool: &SqlitePool, ids: &[String], in_clause: &str) -> BackupResult<Vec<RawSequence>> {
+async fn fetch_sequences(
+    pool: &SqlitePool,
+    ids: &[String],
+    in_clause: &str,
+) -> BackupResult<Vec<RawSequence>> {
     let sql = format!(
         "SELECT branch_id, doc_type, academic_year, last_value FROM number_sequences WHERE branch_id IN ({in_clause})"
     );
@@ -393,8 +461,8 @@ pub async fn import_backup(
     restrict_branch: Option<&str>,
 ) -> BackupResult<ImportSummary> {
     let bytes = std::fs::read(src).map_err(|e| format!("Could not read backup file: {e}"))?;
-    let backup: Backup =
-        serde_json::from_slice(&bytes).map_err(|_| "This is not a valid GEWT backup file".to_string())?;
+    let backup: Backup = serde_json::from_slice(&bytes)
+        .map_err(|_| "This is not a valid GEWT backup file".to_string())?;
     if backup.schema_version != SCHEMA_VERSION {
         return Err(format!(
             "Backup version {} is not supported by this app",
@@ -419,14 +487,23 @@ pub async fn import_backup(
     let apply_config_and_accounts = restrict_branch.is_none();
 
     // 1. Config: branches (newest-wins per row).
-    for b in backup.config.branches.iter().filter(|_| apply_config_and_accounts) {
+    for b in backup
+        .config
+        .branches
+        .iter()
+        .filter(|_| apply_config_and_accounts)
+    {
         let local: Option<String> =
             sqlx::query_scalar("SELECT updated_at FROM branches WHERE id = ?")
                 .bind(&b.id)
                 .fetch_optional(&mut *tx)
                 .await
                 .map_err(|e| e.to_string())?;
-        if local.as_deref().map(|l| b.updated_at.as_str() > l).unwrap_or(true) {
+        if local
+            .as_deref()
+            .map(|l| b.updated_at.as_str() > l)
+            .unwrap_or(true)
+        {
             sqlx::query(
                 "INSERT INTO branches (id, code, name, updated_at) VALUES (?, ?, ?, ?)
                  ON CONFLICT (id) DO UPDATE SET code = excluded.code, name = excluded.name, updated_at = excluded.updated_at",
@@ -455,11 +532,9 @@ pub async fn import_backup(
             .unwrap_or(true)
     {
         sqlx::query(
-            "UPDATE academic_settings SET academic_year_start_month = ?, form_type_code = ?, receipt_type_code = ?, updated_at = ? WHERE id = 1",
+            "UPDATE academic_settings SET academic_year_start_month = ?, updated_at = ? WHERE id = 1",
         )
         .bind(s.academic_year_start_month)
-        .bind(&s.form_type_code)
-        .bind(&s.receipt_type_code)
         .bind(&s.updated_at)
         .execute(&mut *tx)
         .await
@@ -473,12 +548,19 @@ pub async fn import_backup(
             .fetch_optional(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
-        if local.as_deref().map(|l| u.updated_at.as_str() > l).unwrap_or(true) {
+        if local
+            .as_deref()
+            .map(|l| u.updated_at.as_str() > l)
+            .unwrap_or(true)
+        {
             sqlx::query(
-                "INSERT INTO users (id, user_id, name, password_hash, role, branch_id, active, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                "INSERT INTO users (id, user_id, name, password_hash, role, branch_id, active, can_admission, can_receipt, can_outstanding, can_students, can_promote, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT (id) DO UPDATE SET user_id = excluded.user_id, name = excluded.name, password_hash = excluded.password_hash,
-                    role = excluded.role, branch_id = excluded.branch_id, active = excluded.active, updated_at = excluded.updated_at",
+                    role = excluded.role, branch_id = excluded.branch_id, active = excluded.active,
+                    can_admission = excluded.can_admission, can_receipt = excluded.can_receipt,
+                    can_outstanding = excluded.can_outstanding, can_students = excluded.can_students,
+                    can_promote = excluded.can_promote, updated_at = excluded.updated_at",
             )
             .bind(&u.id)
             .bind(&u.user_id)
@@ -487,6 +569,11 @@ pub async fn import_backup(
             .bind(&u.role)
             .bind(&u.branch_id)
             .bind(u.active)
+            .bind(u.can_admission)
+            .bind(u.can_receipt)
+            .bind(u.can_outstanding)
+            .bind(u.can_students)
+            .bind(u.can_promote)
             .bind(&u.updated_at)
             .execute(&mut *tx)
             .await
@@ -525,13 +612,13 @@ pub async fn import_backup(
 
     for s in &backup.data.students {
         sqlx::query(
-            "INSERT INTO students (id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone,
+            "INSERT INTO students (id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, district, taluka, pincode, student_phone, parent_phone,
                 fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4,
                 current_course_year, current_course_period, admission_cancelled, admission_cancelled_at, admission_cancelled_by, created_by, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&s.id).bind(s.form_seq).bind(s.form_year).bind(&s.form_no).bind(&s.admission_date).bind(&s.branch_id).bind(&s.course_id)
-        .bind(&s.student_name).bind(&s.surname).bind(&s.father_name).bind(&s.category).bind(&s.religion).bind(&s.caste).bind(&s.gender).bind(&s.aadhar).bind(&s.address).bind(&s.student_phone).bind(&s.parent_phone)
+        .bind(&s.student_name).bind(&s.surname).bind(&s.father_name).bind(&s.category).bind(&s.religion).bind(&s.caste).bind(&s.gender).bind(&s.aadhar).bind(&s.address).bind(&s.district).bind(&s.taluka).bind(&s.pincode).bind(&s.student_phone).bind(&s.parent_phone)
         .bind(s.fee_year_1).bind(s.fee_year_2).bind(s.fee_year_3).bind(s.fee_year_4)
         .bind(s.tuition_fee_year_1).bind(s.tuition_fee_year_2).bind(s.tuition_fee_year_3).bind(s.tuition_fee_year_4)
         .bind(s.other_fee_year_1).bind(s.other_fee_year_2).bind(s.other_fee_year_3).bind(s.other_fee_year_4)
@@ -619,7 +706,11 @@ pub fn cleanup_staging(dir: &Path) {
 
 /// Checkpoint the WAL and copy the live DB file into the backups folder,
 /// then prune old snapshots (see prune_snapshots for the retention rules).
-pub async fn create_snapshot(pool: &SqlitePool, db_path: &Path, dir: &Path) -> BackupResult<PathBuf> {
+pub async fn create_snapshot(
+    pool: &SqlitePool,
+    db_path: &Path,
+    dir: &Path,
+) -> BackupResult<PathBuf> {
     sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
         .execute(pool)
         .await
@@ -785,7 +876,9 @@ pub async fn restore_snapshot(
             .map_err(|e| format!("Could not open snapshot: {e}"))?;
         let copied = restore_tables(&mut conn).await;
         // Always detach, even if the copy failed and rolled back.
-        let _ = sqlx::query("DETACH DATABASE snap").execute(&mut *conn).await;
+        let _ = sqlx::query("DETACH DATABASE snap")
+            .execute(&mut *conn)
+            .await;
         copied
     }
     .await;
@@ -799,7 +892,10 @@ async fn restore_tables(conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>) -> 
         .await
         .map_err(|e| e.to_string())?;
     let result = async {
-        sqlx::query("BEGIN").execute(&mut **conn).await.map_err(|e| e.to_string())?;
+        sqlx::query("BEGIN")
+            .execute(&mut **conn)
+            .await
+            .map_err(|e| e.to_string())?;
         for table in RESTORE_TABLES {
             // Copy only the columns both schemas share, so older snapshots
             // restore cleanly after migrations added columns.
@@ -833,13 +929,18 @@ async fn restore_tables(conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>) -> 
             .await
             .map_err(|e| e.to_string())?;
         }
-        sqlx::query("COMMIT").execute(&mut **conn).await.map_err(|e| e.to_string())?;
+        sqlx::query("COMMIT")
+            .execute(&mut **conn)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
     .await;
     if result.is_err() {
         let _ = sqlx::query("ROLLBACK").execute(&mut **conn).await;
     }
-    let _ = sqlx::query("PRAGMA foreign_keys = ON").execute(&mut **conn).await;
+    let _ = sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut **conn)
+        .await;
     result
 }

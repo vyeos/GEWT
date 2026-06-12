@@ -190,8 +190,8 @@ export function Receipt({
     void loadStudents();
   }, [token, refreshKey]);
 
-  // The receipt number is system-generated as {branch}-{type}-{seq}-{year},
-  // scoped to the selected student's branch and the receipt date's academic year.
+  // The receipt number is system-generated as {branch}-{seq}, scoped to the
+  // selected student's branch.
   useEffect(() => {
     void loadNextReceiptNo();
     // eslint-disable-next-line react-hooks/exhaustive-deps

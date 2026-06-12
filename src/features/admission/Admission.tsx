@@ -68,6 +68,9 @@ export function Admission({
     gender: "Male",
     aadhar: "",
     address: "",
+    district: "",
+    taluka: "",
+    pincode: "",
     student_phone: "",
     parent_phone: "",
     yearly_fee: 0,
@@ -121,8 +124,8 @@ export function Admission({
     }
   }
 
-  // The form number is system-generated as {branch}-{type}-{seq}-{year}; it
-  // depends on the branch and the academic year of the admission date.
+  // The form number is system-generated as {branch}-{seq}-{year}; it depends
+  // on the branch and the academic year of the admission date.
   useEffect(() => {
     void loadNextFormNo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -232,6 +235,9 @@ export function Admission({
           gender: form.gender,
           aadhar: form.aadhar,
           address: form.address,
+          district: form.district,
+          taluka: form.taluka,
+          pincode: form.pincode,
           student_phone: form.student_phone,
           parent_phone: form.parent_phone,
           yearly_fee,
@@ -640,6 +646,37 @@ export function Admission({
                 setForm({ ...form, address: e.currentTarget.value })
               }
             />
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="flex flex-col gap-2">
+              <Label>District</Label>
+              <Input
+                value={form.district}
+                onChange={(e) =>
+                  setForm({ ...form, district: e.currentTarget.value })
+                }
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Taluka</Label>
+              <Input
+                value={form.taluka}
+                onChange={(e) =>
+                  setForm({ ...form, taluka: e.currentTarget.value })
+                }
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Pincode</Label>
+              <Input
+                inputMode="numeric"
+                value={form.pincode}
+                onChange={(e) =>
+                  setForm({ ...form, pincode: e.currentTarget.value })
+                }
+              />
+            </div>
           </div>
 
           <div className="flex justify-end gap-2">

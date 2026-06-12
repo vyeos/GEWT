@@ -80,6 +80,9 @@ type StudentForm = {
   gender: string;
   aadhar: string;
   address: string;
+  district: string;
+  taluka: string;
+  pincode: string;
   student_phone: string;
   parent_phone: string;
   fee_year_1: number;
@@ -129,6 +132,9 @@ function toForm(student: Student): StudentForm {
     gender: student.gender,
     aadhar: student.aadhar,
     address: student.address,
+    district: student.district,
+    taluka: student.taluka,
+    pincode: student.pincode,
     student_phone: student.student_phone,
     parent_phone: student.parent_phone,
     fee_year_1: student.fee_year_1,
@@ -263,7 +269,10 @@ export function Students({
     async function loadStudents() {
       try {
         setStudents(
-          await api<Student[]>("/students?include_cancelled=true", token),
+          await api<Student[]>(
+            `/students?include_cancelled=${me.role === "admin"}`,
+            token,
+          ),
         );
       } catch (error) {
         toast.error(
@@ -272,8 +281,8 @@ export function Students({
       }
     }
 
-    if (me.role === "admin") void loadStudents();
-  }, [me.role, refreshKey, token]);
+    if (me.can_students) void loadStudents();
+  }, [me.can_students, me.role, refreshKey, token]);
 
   useEffect(() => {
     if (!currentYearValue || currentYears.includes(currentYearValue)) return;
@@ -336,6 +345,9 @@ export function Students({
       gender: form.gender,
       aadhar: form.aadhar,
       address: form.address,
+      district: form.district,
+      taluka: form.taluka,
+      pincode: form.pincode,
       student_phone: form.student_phone,
       parent_phone: form.parent_phone,
       yearly_fee: form.fee_year_1,
@@ -461,12 +473,12 @@ export function Students({
     }
   }
 
-  if (me.role !== "admin") {
+  if (!me.can_students) {
     return (
       <Card>
         <CardContent>
           <p className="text-sm text-muted-foreground">
-            Students management is available to administrators only.
+            Students management is not available for this user.
           </p>
         </CardContent>
       </Card>
@@ -502,15 +514,17 @@ export function Students({
               <Save className="size-4" />
               {saving ? "Saving..." : "Save changes"}
             </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={isCancelled || cancelling}
-              onClick={() => setCancelOpen(true)}
-            >
-              <UserX className="size-4" />
-              Cancel admission
-            </Button>
+            {me.role === "admin" && (
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={isCancelled || cancelling}
+                onClick={() => setCancelOpen(true)}
+              >
+                <UserX className="size-4" />
+                Cancel admission
+              </Button>
+            )}
           </div>
         </div>
 
@@ -760,6 +774,33 @@ export function Students({
                 value={form.address}
                 onChange={(e) => updateForm("address", e.currentTarget.value)}
               />
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="flex flex-col gap-2">
+                <Label>District</Label>
+                <Input
+                  value={form.district}
+                  onChange={(e) =>
+                    updateForm("district", e.currentTarget.value)
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Taluka</Label>
+                <Input
+                  value={form.taluka}
+                  onChange={(e) => updateForm("taluka", e.currentTarget.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Pincode</Label>
+                <Input
+                  inputMode="numeric"
+                  value={form.pincode}
+                  onChange={(e) => updateForm("pincode", e.currentTarget.value)}
+                />
+              </div>
             </div>
           </CardContent>
         </Card>

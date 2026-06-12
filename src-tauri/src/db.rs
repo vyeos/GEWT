@@ -4,7 +4,8 @@
 //! owns a single authoritative SQLite database in the app data directory and
 //! talks to it directly (no server, no network). The logic here is ported from
 //! the original `api/src/lib.rs` handlers, adapted to SQLite and to the new
-//! per-branch, per-year numbering scheme (`{branch}-{type}-{seq}-{year}`).
+//! per-branch numbering scheme (`{branch}-{seq}-{year}` for admission forms,
+//! `{branch}-{seq}` for receipts).
 
 use argon2::{
     password_hash::{PasswordHash, PasswordHasher, SaltString},
@@ -71,6 +72,11 @@ async fn create_schema(pool: &SqlitePool) -> DbResult<()> {
             role TEXT NOT NULL CHECK (role IN ('admin','employee')),
             branch_id TEXT REFERENCES branches(id),
             active INTEGER NOT NULL DEFAULT 1,
+            can_admission INTEGER NOT NULL DEFAULT 1,
+            can_receipt INTEGER NOT NULL DEFAULT 1,
+            can_outstanding INTEGER NOT NULL DEFAULT 1,
+            can_students INTEGER NOT NULL DEFAULT 1,
+            can_promote INTEGER NOT NULL DEFAULT 1,
             updated_at TEXT NOT NULL,
             CHECK (role = 'admin' OR branch_id IS NOT NULL)
         )",
@@ -88,8 +94,6 @@ async fn create_schema(pool: &SqlitePool) -> DbResult<()> {
         "CREATE TABLE IF NOT EXISTS academic_settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             academic_year_start_month INTEGER NOT NULL DEFAULT 9 CHECK (academic_year_start_month BETWEEN 1 AND 12),
-            form_type_code TEXT NOT NULL DEFAULT '11',
-            receipt_type_code TEXT NOT NULL DEFAULT '12',
             updated_at TEXT NOT NULL
         )",
         "CREATE TABLE IF NOT EXISTS students (
@@ -109,6 +113,9 @@ async fn create_schema(pool: &SqlitePool) -> DbResult<()> {
             gender TEXT NOT NULL CHECK (gender IN ('Male','Female')),
             aadhar TEXT NOT NULL DEFAULT '',
             address TEXT NOT NULL DEFAULT '',
+            district TEXT NOT NULL DEFAULT '',
+            taluka TEXT NOT NULL DEFAULT '',
+            pincode TEXT NOT NULL DEFAULT '',
             student_phone TEXT NOT NULL DEFAULT '',
             parent_phone TEXT NOT NULL DEFAULT '',
             fee_year_1 REAL NOT NULL DEFAULT 0,
@@ -178,13 +185,81 @@ async fn create_schema(pool: &SqlitePool) -> DbResult<()> {
 /// older versions of the app (CREATE TABLE IF NOT EXISTS won't touch them).
 async fn migrate_schema(pool: &SqlitePool) -> DbResult<()> {
     let additions = [
-        ("students", "form_no", "ALTER TABLE students ADD COLUMN form_no TEXT NOT NULL DEFAULT ''"),
-        ("students", "surname", "ALTER TABLE students ADD COLUMN surname TEXT NOT NULL DEFAULT ''"),
-        ("students", "father_name", "ALTER TABLE students ADD COLUMN father_name TEXT NOT NULL DEFAULT ''"),
-        ("receipts", "receipt_no", "ALTER TABLE receipts ADD COLUMN receipt_no TEXT NOT NULL DEFAULT ''"),
-        ("receipts", "cancelled", "ALTER TABLE receipts ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0"),
-        ("receipts", "cancelled_at", "ALTER TABLE receipts ADD COLUMN cancelled_at TEXT"),
-        ("receipts", "cancelled_by", "ALTER TABLE receipts ADD COLUMN cancelled_by TEXT"),
+        (
+            "students",
+            "form_no",
+            "ALTER TABLE students ADD COLUMN form_no TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "students",
+            "surname",
+            "ALTER TABLE students ADD COLUMN surname TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "students",
+            "father_name",
+            "ALTER TABLE students ADD COLUMN father_name TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "students",
+            "district",
+            "ALTER TABLE students ADD COLUMN district TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "students",
+            "taluka",
+            "ALTER TABLE students ADD COLUMN taluka TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "students",
+            "pincode",
+            "ALTER TABLE students ADD COLUMN pincode TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "receipts",
+            "receipt_no",
+            "ALTER TABLE receipts ADD COLUMN receipt_no TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "receipts",
+            "cancelled",
+            "ALTER TABLE receipts ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "receipts",
+            "cancelled_at",
+            "ALTER TABLE receipts ADD COLUMN cancelled_at TEXT",
+        ),
+        (
+            "receipts",
+            "cancelled_by",
+            "ALTER TABLE receipts ADD COLUMN cancelled_by TEXT",
+        ),
+        (
+            "users",
+            "can_admission",
+            "ALTER TABLE users ADD COLUMN can_admission INTEGER NOT NULL DEFAULT 1",
+        ),
+        (
+            "users",
+            "can_receipt",
+            "ALTER TABLE users ADD COLUMN can_receipt INTEGER NOT NULL DEFAULT 1",
+        ),
+        (
+            "users",
+            "can_outstanding",
+            "ALTER TABLE users ADD COLUMN can_outstanding INTEGER NOT NULL DEFAULT 1",
+        ),
+        (
+            "users",
+            "can_students",
+            "ALTER TABLE users ADD COLUMN can_students INTEGER NOT NULL DEFAULT 1",
+        ),
+        (
+            "users",
+            "can_promote",
+            "ALTER TABLE users ADD COLUMN can_promote INTEGER NOT NULL DEFAULT 1",
+        ),
     ];
     for (table, column, ddl) in additions {
         let exists: i64 = sqlx::query_scalar(&format!(
@@ -226,13 +301,13 @@ async fn migrate_schema(pool: &SqlitePool) -> DbResult<()> {
 
 /// Document numbers are frozen at creation. Rows that predate this rule (or
 /// arrive via an older backup file) carry an empty string; compose their number
-/// once from the current branch/type codes so it never changes again.
+/// once from the current branch code so it never changes again.
 pub async fn backfill_document_numbers(pool: &SqlitePool) -> DbResult<()> {
     sqlx::query(
         "UPDATE students SET form_no = (
-            SELECT b.code || '-' || a.form_type_code || '-' || students.form_seq || '-' || students.form_year
-            FROM branches b, academic_settings a
-            WHERE b.id = students.branch_id AND a.id = 1
+            SELECT b.code || '-' || students.form_seq || '-' || students.form_year
+            FROM branches b
+            WHERE b.id = students.branch_id
          )
          WHERE form_no = ''",
     )
@@ -241,11 +316,27 @@ pub async fn backfill_document_numbers(pool: &SqlitePool) -> DbResult<()> {
     .map_err(|e| e.to_string())?;
     sqlx::query(
         "UPDATE receipts SET receipt_no = (
-            SELECT b.code || '-' || a.receipt_type_code || '-' || receipts.receipt_seq || '-' || receipts.receipt_year
-            FROM branches b, academic_settings a
-            WHERE b.id = receipts.branch_id AND a.id = 1
+            SELECT b.code || '-' || receipts.receipt_seq
+            FROM branches b
+            WHERE b.id = receipts.branch_id
          )
          WHERE receipt_no = ''",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    seed_receipt_sequence_buckets(pool).await?;
+    Ok(())
+}
+
+async fn seed_receipt_sequence_buckets(pool: &SqlitePool) -> DbResult<()> {
+    sqlx::query(
+        "INSERT INTO number_sequences (branch_id, doc_type, academic_year, last_value)
+         SELECT branch_id, 'receipt', 0, MAX(receipt_seq)
+         FROM receipts
+         GROUP BY branch_id
+         ON CONFLICT (branch_id, doc_type, academic_year)
+         DO UPDATE SET last_value = MAX(last_value, excluded.last_value)",
     )
     .execute(pool)
     .await
@@ -283,20 +374,104 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
 
     // Initial course catalog, ordered alphabetically within each branch.
     for (id, branch_id, name, duration, duration_type) in [
-        ("11111111-1111-1111-1111-000000000001", PRJ, "ANM", 2, "year"),
-        ("11111111-1111-1111-1111-000000000002", PRJ, "B.Ed.", 4, "semester"),
-        ("11111111-1111-1111-1111-000000000003", PRJ, "B.Sc.", 8, "semester"),
-        ("11111111-1111-1111-1111-000000000004", PRJ, "GNM", 3, "year"),
-        ("11111111-1111-1111-1111-000000000005", PRJ, "M.Ed", 4, "semester"),
-        ("11111111-1111-1111-1111-000000000006", PRJ, "M.Sc.", 4, "semester"),
-        ("11111111-1111-1111-1111-000000000007", PRJ, "P.B.B.Sc.", 4, "semester"),
-        ("11111111-1111-1111-1111-000000000008", PRJ, "PTC", 2, "year"),
-        ("22222222-2222-2222-2222-000000000001", HMT, "B.Sc.", 8, "semester"),
-        ("22222222-2222-2222-2222-000000000002", HMT, "GNM", 3, "year"),
-        ("22222222-2222-2222-2222-000000000003", HMT, "P.B.B.Sc.", 4, "semester"),
-        ("33333333-3333-3333-3333-000000000001", TLD, "B.Sc.", 8, "semester"),
-        ("33333333-3333-3333-3333-000000000002", TLD, "GNM", 3, "year"),
-        ("33333333-3333-3333-3333-000000000003", TLD, "P.B.B.Sc.", 4, "semester"),
+        (
+            "11111111-1111-1111-1111-000000000001",
+            PRJ,
+            "ANM",
+            2,
+            "year",
+        ),
+        (
+            "11111111-1111-1111-1111-000000000002",
+            PRJ,
+            "B.Ed.",
+            4,
+            "semester",
+        ),
+        (
+            "11111111-1111-1111-1111-000000000003",
+            PRJ,
+            "B.Sc.",
+            8,
+            "semester",
+        ),
+        (
+            "11111111-1111-1111-1111-000000000004",
+            PRJ,
+            "GNM",
+            3,
+            "year",
+        ),
+        (
+            "11111111-1111-1111-1111-000000000005",
+            PRJ,
+            "M.Ed",
+            4,
+            "semester",
+        ),
+        (
+            "11111111-1111-1111-1111-000000000006",
+            PRJ,
+            "M.Sc.",
+            4,
+            "semester",
+        ),
+        (
+            "11111111-1111-1111-1111-000000000007",
+            PRJ,
+            "P.B.B.Sc.",
+            4,
+            "semester",
+        ),
+        (
+            "11111111-1111-1111-1111-000000000008",
+            PRJ,
+            "PTC",
+            2,
+            "year",
+        ),
+        (
+            "22222222-2222-2222-2222-000000000001",
+            HMT,
+            "B.Sc.",
+            8,
+            "semester",
+        ),
+        (
+            "22222222-2222-2222-2222-000000000002",
+            HMT,
+            "GNM",
+            3,
+            "year",
+        ),
+        (
+            "22222222-2222-2222-2222-000000000003",
+            HMT,
+            "P.B.B.Sc.",
+            4,
+            "semester",
+        ),
+        (
+            "33333333-3333-3333-3333-000000000001",
+            TLD,
+            "B.Sc.",
+            8,
+            "semester",
+        ),
+        (
+            "33333333-3333-3333-3333-000000000002",
+            TLD,
+            "GNM",
+            3,
+            "year",
+        ),
+        (
+            "33333333-3333-3333-3333-000000000003",
+            TLD,
+            "P.B.B.Sc.",
+            4,
+            "semester",
+        ),
     ] {
         sqlx::query(
             "INSERT OR IGNORE INTO courses (id, branch_id, name, duration, duration_type, letterhead, active, updated_at)
@@ -314,8 +489,8 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
     }
 
     sqlx::query(
-        "INSERT OR IGNORE INTO academic_settings (id, academic_year_start_month, form_type_code, receipt_type_code, updated_at)
-         VALUES (1, 9, '11', '12', ?)",
+        "INSERT OR IGNORE INTO academic_settings (id, academic_year_start_month, updated_at)
+         VALUES (1, 9, ?)",
     )
     .bind(&now)
     .execute(pool)
@@ -367,6 +542,11 @@ pub struct User {
     pub role: String,
     pub branch_id: Option<String>,
     pub active: bool,
+    pub can_admission: bool,
+    pub can_receipt: bool,
+    pub can_outstanding: bool,
+    pub can_students: bool,
+    pub can_promote: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -376,10 +556,13 @@ pub struct Me {
     pub name: String,
     pub role: String,
     pub branch_id: Option<String>,
+    pub can_admission: bool,
+    pub can_receipt: bool,
+    pub can_outstanding: bool,
+    pub can_students: bool,
+    pub can_promote: bool,
     pub branch_name: Option<String>,
     pub academic_year_start_month: i64,
-    pub form_type_code: String,
-    pub receipt_type_code: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -403,6 +586,9 @@ pub struct Student {
     pub gender: String,
     pub aadhar: String,
     pub address: String,
+    pub district: String,
+    pub taluka: String,
+    pub pincode: String,
     pub student_phone: String,
     pub parent_phone: String,
     pub fee_year_1: f64,
@@ -478,75 +664,95 @@ macro_rules! impl_from_row {
 }
 
 impl_from_row!(Branch { id, code, name });
-impl_from_row!(Course { id, branch_id, name, duration, duration_type, letterhead, active });
-impl_from_row!(User { id, user_id, name, role, branch_id, active });
-impl_from_row!(
-    Me {
-        id,
-        user_id,
-        name,
-        role,
-        branch_id,
-        branch_name,
-        academic_year_start_month,
-        form_type_code,
-        receipt_type_code,
-    }
-);
-impl_from_row!(
-    Student {
-        id,
-        form_no,
-        admission_date,
-        branch_id,
-        branch_name,
-        course_id,
-        course_name,
-        course_duration,
-        course_duration_type,
-        current_course_period,
-        student_name,
-        surname,
-        father_name,
-        category,
-        religion,
-        caste,
-        gender,
-        aadhar,
-        address,
-        student_phone,
-        parent_phone,
-        fee_year_1,
-        fee_year_2,
-        fee_year_3,
-        fee_year_4,
-        tuition_fee_year_1,
-        tuition_fee_year_2,
-        tuition_fee_year_3,
-        tuition_fee_year_4,
-        other_fee_year_1,
-        other_fee_year_2,
-        other_fee_year_3,
-        other_fee_year_4,
-        admission_cancelled,
-        admission_cancelled_at,
-    }
-);
-impl_from_row!(
-    Receipt {
-        id,
-        receipt_no,
-        receipt_date,
-        student_id,
-        branch_id,
-        fee_type,
-        amount_paid,
-        payment_mode,
-        reference_no,
-        cancelled,
-        cancelled_at,
-    }
-);
+impl_from_row!(Course {
+    id,
+    branch_id,
+    name,
+    duration,
+    duration_type,
+    letterhead,
+    active
+});
+impl_from_row!(User {
+    id,
+    user_id,
+    name,
+    role,
+    branch_id,
+    active,
+    can_admission,
+    can_receipt,
+    can_outstanding,
+    can_students,
+    can_promote,
+});
+impl_from_row!(Me {
+    id,
+    user_id,
+    name,
+    role,
+    branch_id,
+    can_admission,
+    can_receipt,
+    can_outstanding,
+    can_students,
+    can_promote,
+    branch_name,
+    academic_year_start_month,
+});
+impl_from_row!(Student {
+    id,
+    form_no,
+    admission_date,
+    branch_id,
+    branch_name,
+    course_id,
+    course_name,
+    course_duration,
+    course_duration_type,
+    current_course_period,
+    student_name,
+    surname,
+    father_name,
+    category,
+    religion,
+    caste,
+    gender,
+    aadhar,
+    address,
+    district,
+    taluka,
+    pincode,
+    student_phone,
+    parent_phone,
+    fee_year_1,
+    fee_year_2,
+    fee_year_3,
+    fee_year_4,
+    tuition_fee_year_1,
+    tuition_fee_year_2,
+    tuition_fee_year_3,
+    tuition_fee_year_4,
+    other_fee_year_1,
+    other_fee_year_2,
+    other_fee_year_3,
+    other_fee_year_4,
+    admission_cancelled,
+    admission_cancelled_at,
+});
+impl_from_row!(Receipt {
+    id,
+    receipt_no,
+    receipt_date,
+    student_id,
+    branch_id,
+    fee_type,
+    amount_paid,
+    payment_mode,
+    reference_no,
+    cancelled,
+    cancelled_at,
+});
 
 // Request payloads (from the frontend).
 #[derive(Debug, Deserialize)]
@@ -564,7 +770,14 @@ pub struct StudentRequest {
     pub caste: String,
     pub gender: String,
     pub aadhar: String,
+    #[serde(default)]
     pub address: String,
+    #[serde(default)]
+    pub district: String,
+    #[serde(default)]
+    pub taluka: String,
+    #[serde(default)]
+    pub pincode: String,
     pub student_phone: String,
     pub parent_phone: String,
     pub fee_year_1: f64,
@@ -610,6 +823,16 @@ pub struct UserRequest {
     pub password: Option<String>,
     #[serde(default = "default_active")]
     pub active: bool,
+    #[serde(default = "default_active")]
+    pub can_admission: bool,
+    #[serde(default = "default_active")]
+    pub can_receipt: bool,
+    #[serde(default = "default_active")]
+    pub can_outstanding: bool,
+    #[serde(default = "default_active")]
+    pub can_students: bool,
+    #[serde(default = "default_active")]
+    pub can_promote: bool,
 }
 
 fn default_active() -> bool {
@@ -633,8 +856,6 @@ pub struct PromoteResponse {
 #[derive(Debug, Deserialize)]
 pub struct SettingsRequest {
     pub academic_year_start_month: i64,
-    pub form_type_code: Option<String>,
-    pub receipt_type_code: Option<String>,
 }
 
 struct StudentFees {
@@ -682,8 +903,20 @@ fn existing_student_fees(student: &Student) -> StudentFees {
 
 /// Verify credentials and return the user identity used for the session.
 pub async fn authenticate(pool: &SqlitePool, user_id: &str, password: &str) -> DbResult<User> {
-    let row: Option<(String, String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, name, password_hash, role, branch_id FROM users WHERE user_id = ? AND active = 1",
+    let row: Option<(
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        bool,
+        bool,
+        bool,
+        bool,
+        bool,
+    )> = sqlx::query_as(
+        "SELECT id, name, password_hash, role, branch_id, can_admission, can_receipt, can_outstanding, can_students, can_promote
+         FROM users WHERE user_id = ? AND active = 1",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -698,7 +931,8 @@ pub async fn authenticate(pool: &SqlitePool, user_id: &str, password: &str) -> D
         }
         return Err("Invalid user ID or password".to_string());
     };
-    let parsed = PasswordHash::new(&row.2).map_err(|_| "Invalid user ID or password".to_string())?;
+    let parsed =
+        PasswordHash::new(&row.2).map_err(|_| "Invalid user ID or password".to_string())?;
     Argon2::default()
         .verify_password(password.as_bytes(), &parsed)
         .map_err(|_| "Invalid user ID or password".to_string())?;
@@ -711,13 +945,20 @@ pub async fn authenticate(pool: &SqlitePool, user_id: &str, password: &str) -> D
         branch_id: row.4,
         // The lookup query filters on active = 1.
         active: true,
+        can_admission: row.5,
+        can_receipt: row.6,
+        can_outstanding: row.7,
+        can_students: row.8,
+        can_promote: row.9,
     })
 }
 
 pub async fn load_me(pool: &SqlitePool, user_id: &str) -> DbResult<Me> {
     sqlx::query_as::<_, Me>(
-        "SELECT u.id, u.user_id, u.name, u.role, u.branch_id, b.name AS branch_name,
-         s.academic_year_start_month, s.form_type_code, s.receipt_type_code
+        "SELECT u.id, u.user_id, u.name, u.role, u.branch_id,
+         u.can_admission, u.can_receipt, u.can_outstanding, u.can_students, u.can_promote,
+         b.name AS branch_name,
+         s.academic_year_start_month
          FROM users u
          LEFT JOIN branches b ON b.id = u.branch_id
          CROSS JOIN academic_settings s
@@ -741,7 +982,10 @@ fn hash_password(password: &str) -> DbResult<String> {
 // Branches / courses / users / settings
 // ---------------------------------------------------------------------------
 
-pub async fn list_branches(pool: &SqlitePool, branch_filter: Option<&str>) -> DbResult<Vec<Branch>> {
+pub async fn list_branches(
+    pool: &SqlitePool,
+    branch_filter: Option<&str>,
+) -> DbResult<Vec<Branch>> {
     let rows = if let Some(bid) = branch_filter {
         sqlx::query_as("SELECT id, code, name FROM branches WHERE id = ? ORDER BY name")
             .bind(bid)
@@ -868,14 +1112,15 @@ pub async fn update_course(pool: &SqlitePool, id: &str, req: CourseRequest) -> D
     if existing.branch_id != req.branch_id {
         // A course with admitted students anchors their branch and numbering;
         // moving it would strand them under a branch they don't belong to.
-        let enrolled: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM students WHERE course_id = ?")
-                .bind(id)
-                .fetch_one(pool)
-                .await
-                .map_err(|e| e.to_string())?;
+        let enrolled: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM students WHERE course_id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| e.to_string())?;
         if enrolled > 0 {
-            return Err("This course has admitted students and cannot move to another branch".to_string());
+            return Err(
+                "This course has admitted students and cannot move to another branch".to_string(),
+            );
         }
     }
     sqlx::query(
@@ -957,7 +1202,9 @@ pub async fn delete_course(pool: &SqlitePool, id: &str) -> DbResult<()> {
 }
 
 pub async fn list_users(pool: &SqlitePool) -> DbResult<Vec<User>> {
-    sqlx::query_as("SELECT id, user_id, name, role, branch_id, active FROM users ORDER BY name")
+    sqlx::query_as(
+        "SELECT id, user_id, name, role, branch_id, active, can_admission, can_receipt, can_outstanding, can_students, can_promote FROM users ORDER BY name",
+    )
         .fetch_all(pool)
         .await
         .map_err(|e| e.to_string())
@@ -997,8 +1244,8 @@ pub async fn create_user(pool: &SqlitePool, req: UserRequest) -> DbResult<User> 
         .ok_or_else(|| "Password is required".to_string())?;
     let id = new_id();
     sqlx::query(
-        "INSERT INTO users (id, user_id, name, password_hash, role, branch_id, active, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+        "INSERT INTO users (id, user_id, name, password_hash, role, branch_id, active, can_admission, can_receipt, can_outstanding, can_students, can_promote, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&user_id)
@@ -1006,6 +1253,11 @@ pub async fn create_user(pool: &SqlitePool, req: UserRequest) -> DbResult<User> 
     .bind(hash_password(password)?)
     .bind(&role)
     .bind(&branch_id)
+    .bind(req.can_admission)
+    .bind(req.can_receipt)
+    .bind(req.can_outstanding)
+    .bind(req.can_students)
+    .bind(req.can_promote)
     .bind(now_rfc3339())
     .execute(pool)
     .await
@@ -1017,6 +1269,11 @@ pub async fn create_user(pool: &SqlitePool, req: UserRequest) -> DbResult<User> 
         role,
         branch_id,
         active: true,
+        can_admission: req.can_admission,
+        can_receipt: req.can_receipt,
+        can_outstanding: req.can_outstanding,
+        can_students: req.can_students,
+        can_promote: req.can_promote,
     })
 }
 
@@ -1053,7 +1310,7 @@ pub async fn update_user(pool: &SqlitePool, id: &str, req: UserRequest) -> DbRes
         .filter(|v| !v.is_empty())
     {
         sqlx::query(
-            "UPDATE users SET user_id = ?, name = ?, role = ?, branch_id = ?, active = ?, password_hash = ?, updated_at = ? WHERE id = ?",
+            "UPDATE users SET user_id = ?, name = ?, role = ?, branch_id = ?, active = ?, password_hash = ?, can_admission = ?, can_receipt = ?, can_outstanding = ?, can_students = ?, can_promote = ?, updated_at = ? WHERE id = ?",
         )
         .bind(&user_id)
         .bind(&name)
@@ -1061,6 +1318,11 @@ pub async fn update_user(pool: &SqlitePool, id: &str, req: UserRequest) -> DbRes
         .bind(&branch_id)
         .bind(req.active)
         .bind(hash_password(password)?)
+        .bind(req.can_admission)
+        .bind(req.can_receipt)
+        .bind(req.can_outstanding)
+        .bind(req.can_students)
+        .bind(req.can_promote)
         .bind(&now)
         .bind(id)
         .execute(pool)
@@ -1068,13 +1330,18 @@ pub async fn update_user(pool: &SqlitePool, id: &str, req: UserRequest) -> DbRes
         .map_err(friendly_db_error)?
     } else {
         sqlx::query(
-            "UPDATE users SET user_id = ?, name = ?, role = ?, branch_id = ?, active = ?, updated_at = ? WHERE id = ?",
+            "UPDATE users SET user_id = ?, name = ?, role = ?, branch_id = ?, active = ?, can_admission = ?, can_receipt = ?, can_outstanding = ?, can_students = ?, can_promote = ?, updated_at = ? WHERE id = ?",
         )
         .bind(&user_id)
         .bind(&name)
         .bind(&role)
         .bind(&branch_id)
         .bind(req.active)
+        .bind(req.can_admission)
+        .bind(req.can_receipt)
+        .bind(req.can_outstanding)
+        .bind(req.can_students)
+        .bind(req.can_promote)
         .bind(&now)
         .bind(id)
         .execute(pool)
@@ -1091,6 +1358,11 @@ pub async fn update_user(pool: &SqlitePool, id: &str, req: UserRequest) -> DbRes
         role,
         branch_id,
         active: req.active,
+        can_admission: req.can_admission,
+        can_receipt: req.can_receipt,
+        can_outstanding: req.can_outstanding,
+        can_students: req.can_students,
+        can_promote: req.can_promote,
     })
 }
 
@@ -1100,15 +1372,10 @@ pub async fn update_settings(pool: &SqlitePool, req: SettingsRequest) -> DbResul
     }
     sqlx::query(
         "UPDATE academic_settings
-         SET academic_year_start_month = ?,
-             form_type_code = COALESCE(?, form_type_code),
-             receipt_type_code = COALESCE(?, receipt_type_code),
-             updated_at = ?
+         SET academic_year_start_month = ?, updated_at = ?
          WHERE id = 1",
     )
     .bind(req.academic_year_start_month)
-    .bind(req.form_type_code.as_deref().map(str::trim).filter(|v| !v.is_empty()))
-    .bind(req.receipt_type_code.as_deref().map(str::trim).filter(|v| !v.is_empty()))
     .bind(now_rfc3339())
     .execute(pool)
     .await
@@ -1117,7 +1384,9 @@ pub async fn update_settings(pool: &SqlitePool, req: SettingsRequest) -> DbResul
 }
 
 // ---------------------------------------------------------------------------
-// Numbering: {branch-code}-{type-code}-{seq}-{academic-year}
+// Numbering: forms are {branch-code}-{seq}-{academic-year}; receipts are
+// {branch-code}-{seq}. Receipt sequences use academic_year = 0 so yearless
+// visible numbers do not repeat annually.
 // ---------------------------------------------------------------------------
 
 /// The academic year that a given `YYYY-MM-DD` date falls into, labelled by its
@@ -1138,18 +1407,6 @@ fn academic_year(date: &str, start_month: i64) -> DbResult<i32> {
 
 async fn start_month(pool: &SqlitePool) -> DbResult<i64> {
     sqlx::query_scalar("SELECT academic_year_start_month FROM academic_settings WHERE id = 1")
-        .fetch_one(pool)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-async fn type_code(pool: &SqlitePool, doc_type: &str) -> DbResult<String> {
-    let col = if doc_type == "form" {
-        "form_type_code"
-    } else {
-        "receipt_type_code"
-    };
-    sqlx::query_scalar(&format!("SELECT {col} FROM academic_settings WHERE id = 1"))
         .fetch_one(pool)
         .await
         .map_err(|e| e.to_string())
@@ -1201,8 +1458,20 @@ async fn next_seq(
     Ok(value)
 }
 
-fn compose_code(branch_code: &str, type_code: &str, seq: i64, year: i32) -> String {
-    format!("{branch_code}-{type_code}-{seq}-{year}")
+fn sequence_year(doc_type: &str, document_year: i32) -> i32 {
+    if doc_type == "receipt" {
+        0
+    } else {
+        document_year
+    }
+}
+
+fn compose_form_no(branch_code: &str, seq: i64, year: i32) -> String {
+    format!("{branch_code}-{seq}-{year}")
+}
+
+fn compose_receipt_no(branch_code: &str, seq: i64) -> String {
+    format!("{branch_code}-{seq}")
 }
 
 /// Composite preview of the next form/receipt number for a branch + date.
@@ -1214,13 +1483,13 @@ pub async fn preview_number(
 ) -> DbResult<String> {
     let month = start_month(pool).await?;
     let year = academic_year(date, month)?;
-    let seq = peek_seq(pool, branch_id, doc_type, year).await?;
-    Ok(compose_code(
-        &branch_code(pool, branch_id).await?,
-        &type_code(pool, doc_type).await?,
-        seq,
-        year,
-    ))
+    let seq = peek_seq(pool, branch_id, doc_type, sequence_year(doc_type, year)).await?;
+    let bcode = branch_code(pool, branch_id).await?;
+    Ok(if doc_type == "receipt" {
+        compose_receipt_no(&bcode, seq)
+    } else {
+        compose_form_no(&bcode, seq, year)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1230,12 +1499,12 @@ pub async fn preview_number(
 fn student_select(where_clause: &str) -> String {
     format!(
         "SELECT s.id,
-         COALESCE(NULLIF(s.form_no, ''), b.code || '-' || aset.form_type_code || '-' || s.form_seq || '-' || s.form_year) AS form_no,
+         COALESCE(NULLIF(s.form_no, ''), b.code || '-' || s.form_seq || '-' || s.form_year) AS form_no,
          s.admission_date, s.branch_id, b.name AS branch_name, s.course_id, c.name AS course_name,
          c.duration AS course_duration, c.duration_type AS course_duration_type,
          s.current_course_period,
          s.student_name, s.surname, s.father_name, s.category, s.religion, s.caste, s.gender,
-         s.aadhar, s.address, s.student_phone, s.parent_phone,
+         s.aadhar, s.address, s.district, s.taluka, s.pincode, s.student_phone, s.parent_phone,
          s.fee_year_1, s.fee_year_2, s.fee_year_3, s.fee_year_4,
          s.tuition_fee_year_1, s.tuition_fee_year_2, s.tuition_fee_year_3, s.tuition_fee_year_4,
          s.other_fee_year_1, s.other_fee_year_2, s.other_fee_year_3, s.other_fee_year_4,
@@ -1243,7 +1512,6 @@ fn student_select(where_clause: &str) -> String {
          FROM students s
          JOIN branches b ON b.id = s.branch_id
          JOIN courses c ON c.id = s.course_id
-         CROSS JOIN academic_settings aset
          {where_clause}
          ORDER BY s.form_year DESC, s.form_seq ASC"
     )
@@ -1289,7 +1557,12 @@ fn validate_date(date: &str, what: &str) -> DbResult<()> {
 }
 
 fn normalize_student_fees(req: &StudentRequest) -> DbResult<StudentFees> {
-    let yearly = [req.fee_year_1, req.fee_year_2, req.fee_year_3, req.fee_year_4];
+    let yearly = [
+        req.fee_year_1,
+        req.fee_year_2,
+        req.fee_year_3,
+        req.fee_year_4,
+    ];
     let tuition = [
         req.tuition_fee_year_1.unwrap_or(req.fee_year_1),
         req.tuition_fee_year_2.unwrap_or(req.fee_year_2),
@@ -1372,20 +1645,19 @@ pub async fn create_student(
     let month = start_month(pool).await?;
     let year = academic_year(&req.admission_date, month)?;
     // The document number is composed once here and stored permanently; later
-    // branch-code or type-code changes never rewrite already-issued numbers.
+    // branch-code changes never rewrite already-issued numbers.
     let bcode = branch_code(pool, &req.branch_id).await?;
-    let tcode = type_code(pool, "form").await?;
     let now = now_rfc3339();
     let id = new_id();
 
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     let seq = next_seq(&mut tx, &req.branch_id, "form", year).await?;
-    let form_no = compose_code(&bcode, &tcode, seq, year);
+    let form_no = compose_form_no(&bcode, seq, year);
     sqlx::query(
-        "INSERT INTO students (id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone,
+        "INSERT INTO students (id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, district, taluka, pincode, student_phone, parent_phone,
             fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4,
             current_course_year, current_course_period, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?)",
     )
     .bind(&id)
     .bind(seq)
@@ -1402,9 +1674,12 @@ pub async fn create_student(
     .bind(&req.caste)
     .bind(&req.gender)
     .bind(&req.aadhar)
-    .bind(&req.address)
-    .bind(&req.student_phone)
-    .bind(&req.parent_phone)
+    .bind(req.address.trim())
+    .bind(req.district.trim())
+    .bind(req.taluka.trim())
+    .bind(req.pincode.trim())
+    .bind(req.student_phone.trim())
+    .bind(req.parent_phone.trim())
     .bind(fees.yearly[0])
     .bind(fees.yearly[1])
     .bind(fees.yearly[2])
@@ -1461,7 +1736,7 @@ pub async fn update_student(pool: &SqlitePool, id: &str, req: StudentRequest) ->
     // Form numbering is assigned once at admission and never changes on edit.
     sqlx::query(
         "UPDATE students SET admission_date = ?, course_id = ?, current_course_year = ?, current_course_period = ?,
-            student_name = ?, surname = ?, father_name = ?, category = ?, religion = ?, caste = ?, gender = ?, aadhar = ?, address = ?, student_phone = ?, parent_phone = ?,
+            student_name = ?, surname = ?, father_name = ?, category = ?, religion = ?, caste = ?, gender = ?, aadhar = ?, address = ?, district = ?, taluka = ?, pincode = ?, student_phone = ?, parent_phone = ?,
             fee_year_1 = ?, fee_year_2 = ?, fee_year_3 = ?, fee_year_4 = ?, tuition_fee_year_1 = ?, tuition_fee_year_2 = ?, tuition_fee_year_3 = ?, tuition_fee_year_4 = ?,
             other_fee_year_1 = ?, other_fee_year_2 = ?, other_fee_year_3 = ?, other_fee_year_4 = ?, updated_at = ?
          WHERE id = ?",
@@ -1478,9 +1753,12 @@ pub async fn update_student(pool: &SqlitePool, id: &str, req: StudentRequest) ->
     .bind(&req.caste)
     .bind(&req.gender)
     .bind(&req.aadhar)
-    .bind(&req.address)
-    .bind(&req.student_phone)
-    .bind(&req.parent_phone)
+    .bind(req.address.trim())
+    .bind(req.district.trim())
+    .bind(req.taluka.trim())
+    .bind(req.pincode.trim())
+    .bind(req.student_phone.trim())
+    .bind(req.parent_phone.trim())
     .bind(fees.yearly[0])
     .bind(fees.yearly[1])
     .bind(fees.yearly[2])
@@ -1612,12 +1890,11 @@ pub async fn promote_students(pool: &SqlitePool, req: PromoteRequest) -> DbResul
 fn receipt_select(where_clause: &str) -> String {
     format!(
         "SELECT r.id,
-         COALESCE(NULLIF(r.receipt_no, ''), b.code || '-' || aset.receipt_type_code || '-' || r.receipt_seq || '-' || r.receipt_year) AS receipt_no,
+         COALESCE(NULLIF(r.receipt_no, ''), b.code || '-' || r.receipt_seq) AS receipt_no,
          r.receipt_date, r.student_id, r.branch_id, COALESCE(r.fee_type, 'Tuition') AS fee_type,
          r.amount_paid, r.payment_mode, r.reference_no, r.cancelled, r.cancelled_at
          FROM receipts r
          JOIN branches b ON b.id = r.branch_id
-         CROSS JOIN academic_settings aset
          {where_clause}
          ORDER BY r.receipt_year DESC, r.receipt_seq DESC"
     )
@@ -1633,10 +1910,7 @@ pub async fn list_receipts(
             receipt_select("WHERE r.branch_id = ? AND r.student_id = ?"),
             vec![b.to_string(), s.to_string()],
         ),
-        (Some(b), None) => (
-            receipt_select("WHERE r.branch_id = ?"),
-            vec![b.to_string()],
-        ),
+        (Some(b), None) => (receipt_select("WHERE r.branch_id = ?"), vec![b.to_string()]),
         (None, Some(s)) => (
             receipt_select("WHERE r.student_id = ?"),
             vec![s.to_string()],
@@ -1663,7 +1937,11 @@ pub async fn student_branch(pool: &SqlitePool, student_id: &str) -> DbResult<(St
 /// The amount still owed by a student for one fee type, given everything that
 /// is due up to their current period. Used to reject overpayments server-side
 /// (the frontend clamps too, but its receipt list can be stale).
-async fn pending_for_fee_type(pool: &SqlitePool, student: &Student, fee_type: &str) -> DbResult<f64> {
+async fn pending_for_fee_type(
+    pool: &SqlitePool,
+    student: &Student,
+    fee_type: &str,
+) -> DbResult<f64> {
     let paid: f64 = sqlx::query_scalar(
         "SELECT CAST(COALESCE(SUM(amount_paid), 0) AS REAL) FROM receipts
          WHERE student_id = ? AND COALESCE(fee_type, 'Tuition') = ? AND cancelled = 0",
@@ -1736,13 +2014,18 @@ pub async fn create_receipt(
     let month = start_month(pool).await?;
     let year = academic_year(&req.receipt_date, month)?;
     let bcode = branch_code(pool, branch_id).await?;
-    let tcode = type_code(pool, "receipt").await?;
     let now = now_rfc3339();
     let id = new_id();
 
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    let seq = next_seq(&mut tx, branch_id, "receipt", year).await?;
-    let receipt_no = compose_code(&bcode, &tcode, seq, year);
+    let seq = next_seq(
+        &mut tx,
+        branch_id,
+        "receipt",
+        sequence_year("receipt", year),
+    )
+    .await?;
+    let receipt_no = compose_receipt_no(&bcode, seq);
     sqlx::query(
         "INSERT INTO receipts (id, receipt_seq, receipt_year, receipt_no, receipt_date, student_id, branch_id, fee_type, amount_paid, payment_mode, reference_no, created_by, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1932,7 +2215,10 @@ fn outstanding_year_breakdown(
         .collect()
 }
 
-pub async fn outstanding(pool: &SqlitePool, branch_filter: Option<&str>) -> DbResult<Vec<OutstandingRow>> {
+pub async fn outstanding(
+    pool: &SqlitePool,
+    branch_filter: Option<&str>,
+) -> DbResult<Vec<OutstandingRow>> {
     let students = list_students(pool, branch_filter, false).await?;
 
     // Paid totals per student and fee type, in one pass, scoped to the branch
@@ -1958,11 +2244,15 @@ pub async fn outstanding(pool: &SqlitePool, branch_filter: Option<&str>) -> DbRe
     // per student wins.
     let last_sql = format!(
         "SELECT r.student_id,
-         COALESCE(NULLIF(r.receipt_no, ''), b.code || '-' || aset.receipt_type_code || '-' || r.receipt_seq || '-' || r.receipt_year) AS receipt_no
-         FROM receipts r JOIN branches b ON b.id = r.branch_id CROSS JOIN academic_settings aset
+         COALESCE(NULLIF(r.receipt_no, ''), b.code || '-' || r.receipt_seq) AS receipt_no
+         FROM receipts r JOIN branches b ON b.id = r.branch_id
          WHERE r.cancelled = 0{}
          ORDER BY r.receipt_year ASC, r.receipt_seq ASC",
-        if branch_filter.is_some() { " AND r.branch_id = ?" } else { "" }
+        if branch_filter.is_some() {
+            " AND r.branch_id = ?"
+        } else {
+            ""
+        }
     );
     let mut last_q = sqlx::query_as::<_, (String, String)>(&last_sql);
     if let Some(bid) = branch_filter {

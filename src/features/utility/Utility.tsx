@@ -37,6 +37,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -73,6 +74,7 @@ import {
   unarchiveCourse,
   updateBranchCode,
 } from "@/lib/api";
+import { PAGE_ACCESS, pageAccessLabels, type PageAccessField } from "@/lib/access";
 import { fetchLetterheads, letterheadSrc } from "@/lib/letterhead";
 import type { Branch, Course, Me, User } from "@/types";
 
@@ -95,6 +97,11 @@ type UserForm = {
   branch_id: string;
   password: string;
   active: boolean;
+  can_admission: boolean;
+  can_receipt: boolean;
+  can_outstanding: boolean;
+  can_students: boolean;
+  can_promote: boolean;
 };
 
 function newCourse(branches: Branch[]): CourseForm {
@@ -115,6 +122,11 @@ function newUser(): UserForm {
     branch_id: "",
     password: "",
     active: true,
+    can_admission: true,
+    can_receipt: true,
+    can_outstanding: true,
+    can_students: true,
+    can_promote: true,
   };
 }
 
@@ -151,8 +163,6 @@ export function Utility({
   const [branchFilter, setBranchFilter] = useState("all");
   const [settings, setSettings] = useState({
     academic_year_start_month: me.academic_year_start_month,
-    form_type_code: me.form_type_code,
-    receipt_type_code: me.receipt_type_code,
   });
   const [branchCodes, setBranchCodes] = useState<Record<string, string>>(() =>
     Object.fromEntries(branches.map((b) => [b.id, b.code])),
@@ -288,8 +298,20 @@ export function Utility({
       branch_id: item.branch_id ?? "",
       password: "",
       active: item.active,
+      can_admission: item.can_admission,
+      can_receipt: item.can_receipt,
+      can_outstanding: item.can_outstanding,
+      can_students: item.can_students,
+      can_promote: item.can_promote,
     });
     setUserDialogOpen(true);
+  }
+
+  function togglePageAccess(field: PageAccessField, checked: boolean) {
+    setUserForm((current) => ({
+      ...current,
+      [field]: checked,
+    }));
   }
 
   async function saveCourse(event: FormEvent) {
@@ -335,6 +357,11 @@ export function Utility({
               : null,
           password: userForm.password || null,
           active: userForm.active,
+          can_admission: userForm.can_admission,
+          can_receipt: userForm.can_receipt,
+          can_outstanding: userForm.can_outstanding,
+          can_students: userForm.can_students,
+          can_promote: userForm.can_promote,
         }),
       });
       toast.success(editingUserId ? "User updated" : "User created");
@@ -887,6 +914,7 @@ export function Utility({
                       const branchName =
                         branches.find((b) => b.id === user.branch_id)?.name ??
                         "All branches";
+                      const accessLabels = pageAccessLabels(user);
 
                       return (
                         <TableRow key={user.id}>
@@ -906,17 +934,32 @@ export function Utility({
                             </div>
                           </TableCell>
                           <TableCell>
-                            <div className="flex items-center gap-1.5">
-                              <Badge
-                                variant={
-                                  user.role === "admin" ? "default" : "secondary"
-                                }
-                              >
-                                {user.role === "admin" ? "Admin" : "Employee"}
-                              </Badge>
-                              {!user.active && (
-                                <Badge variant="destructive">Inactive</Badge>
-                              )}
+                            <div className="flex flex-col gap-2">
+                              <div className="flex items-center gap-1.5">
+                                <Badge
+                                  variant={
+                                    user.role === "admin"
+                                      ? "default"
+                                      : "secondary"
+                                  }
+                                >
+                                  {user.role === "admin" ? "Admin" : "Employee"}
+                                </Badge>
+                                {!user.active && (
+                                  <Badge variant="destructive">Inactive</Badge>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {accessLabels.map((label) => (
+                                  <Badge
+                                    key={label}
+                                    variant="outline"
+                                    className="text-xs"
+                                  >
+                                    {label}
+                                  </Badge>
+                                ))}
+                              </div>
                             </div>
                           </TableCell>
                           <TableCell>
@@ -1048,6 +1091,30 @@ export function Utility({
                     </div>
                   )}
                 </div>
+                <div className="flex flex-col gap-3 rounded-md border p-3">
+                  <div>
+                    <Label>Page access</Label>
+                    <p className="text-xs text-muted-foreground">
+                      The user will only see checked pages in the sidebar.
+                    </p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {PAGE_ACCESS.map((item) => (
+                      <label
+                        key={item.field}
+                        className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+                      >
+                        <Checkbox
+                          checked={userForm[item.field]}
+                          onCheckedChange={(checked) =>
+                            togglePageAccess(item.field, checked === true)
+                          }
+                        />
+                        <span>{item.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
                 <div className="flex flex-col gap-2">
                   <Label>{editingUserId ? "New password" : "Password"}</Label>
                   <Input
@@ -1112,12 +1179,7 @@ export function Utility({
             <CardHeader>
               <CardTitle>Academic settings</CardTitle>
               <CardDescription>
-                Configure system-wide preferences. The form and receipt codes are
-                used in the document number{" "}
-                <code className="rounded bg-muted px-1 py-0.5 text-xs">
-                  {`{branch}-{type}-{number}-{year}`}
-                </code>
-                .
+                Configure the academic year used for admission form numbering and fee due calculations.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-5">
@@ -1135,32 +1197,6 @@ export function Utility({
                     })
                   }
                 />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col gap-2">
-                  <Label>Form number code</Label>
-                  <Input
-                    value={settings.form_type_code}
-                    onChange={(e) =>
-                      setSettings({
-                        ...settings,
-                        form_type_code: e.currentTarget.value,
-                      })
-                    }
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label>Receipt number code</Label>
-                  <Input
-                    value={settings.receipt_type_code}
-                    onChange={(e) =>
-                      setSettings({
-                        ...settings,
-                        receipt_type_code: e.currentTarget.value,
-                      })
-                    }
-                  />
-                </div>
               </div>
               <Button onClick={saveSettings} type="button" className="self-start">
                 <Settings className="size-4" />

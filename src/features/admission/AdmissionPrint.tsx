@@ -14,6 +14,9 @@ export type PrintableAdmission = {
   gender: string;
   aadhar: string;
   address: string;
+  district: string;
+  taluka: string;
+  pincode: string;
   student_phone: string;
   parent_phone: string;
   yearly_fee: number;
@@ -80,6 +83,20 @@ export function AdmissionPrint({
 
           {admission.address && (
             <BlockLine label="Complete Native Address :" value={admission.address} />
+          )}
+
+          {(admission.district || admission.taluka || admission.pincode) && (
+            <div className="mt-3 grid grid-cols-3 gap-6 text-center">
+              {admission.district && (
+                <LineField label="District" value={admission.district} />
+              )}
+              {admission.taluka && (
+                <LineField label="Taluka" value={admission.taluka} />
+              )}
+              {admission.pincode && (
+                <LineField label="Pincode" value={admission.pincode} />
+              )}
+            </div>
           )}
 
           <div className="mt-3 grid grid-cols-2 gap-8 text-center">

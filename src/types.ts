@@ -40,8 +40,6 @@ export type User = {
 export type Me = User & {
   branch_name: string | null;
   academic_year_start_month: number;
-  form_type_code: string;
-  receipt_type_code: string;
 };
 
 export type Student = {
@@ -64,6 +62,9 @@ export type Student = {
   gender: string;
   aadhar: string;
   address: string;
+  district: string;
+  taluka: string;
+  pincode: string;
   student_phone: string;
   parent_phone: string;
   fee_year_1: number;
