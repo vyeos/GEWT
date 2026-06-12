@@ -51,7 +51,7 @@ export function ReceiptPrint({
         letterhead={course?.letterhead}
         pageClassName="h-[148.5mm]"
         letterheadClassName="h-[297mm]"
-        contentClassName="inset-x-[3%] top-[63mm] bottom-auto text-[13px]"
+        contentClassName="inset-x-[3%] top-[58mm] bottom-auto text-[13px]"
       >
         <div className="border-y-2 border-black py-1.5">
           <div className="mb-2.5 grid grid-cols-[1fr_auto_1fr] items-center gap-3">

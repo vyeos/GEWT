@@ -44,7 +44,7 @@ export function AdmissionPrint({
     <div id="admission-print">
       <PrintPage
         letterhead={course?.letterhead}
-        contentClassName="inset-x-[3%] top-[25.2%] bottom-[17%] text-[15px]"
+        contentClassName="inset-x-[3%] top-[58mm] bottom-[17%] text-[15px]"
       >
         <div className="pb-1.5 pt-2">
           <div className="mb-4 grid min-h-8 grid-cols-[1fr_auto_1fr] items-start gap-3">
