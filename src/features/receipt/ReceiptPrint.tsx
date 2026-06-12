@@ -16,6 +16,9 @@ export type PrintableReceipt = {
   payment_mode: PaymentMode;
   amount_paid: number;
   reference_no: string | null;
+  // The first print, triggered right when the receipt is saved, is the
+  // original; every reprint afterwards is marked as a duplicate.
+  original: boolean;
 };
 
 export function ReceiptPrint({
@@ -55,7 +58,9 @@ export function ReceiptPrint({
             <div>
               Receipt No. : <span>{uppercase(String(receipt.receipt_no))}</span>
             </div>
-            <div className="font-bold">Original Copy</div>
+            <div className="font-bold">
+              {receipt.original ? "Original Copy" : "Duplicate Copy"}
+            </div>
             <div className="text-right">
               Date. : <span>{displayDate(today())}</span>
             </div>

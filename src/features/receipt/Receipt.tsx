@@ -435,7 +435,15 @@ export function Receipt({
         ),
       );
       toast.success(`Saved Receipt #${savedReceipt.receipt_no}`);
-      handlePrint(savedReceipt);
+      handlePrint({
+        receipt_no: savedReceipt.receipt_no,
+        receipt_date: savedReceipt.receipt_date,
+        fee_type: savedReceipt.fee_type,
+        payment_mode: savedReceipt.payment_mode,
+        amount_paid: savedReceipt.amount_paid,
+        reference_no: savedReceipt.reference_no,
+        original: true,
+      });
       // Clear the money fields so a stray second click can't book a duplicate.
       setAmount(0);
       setReference("");
@@ -930,6 +938,7 @@ export function Receipt({
                                     payment_mode: r.payment_mode,
                                     amount_paid: r.amount_paid,
                                     reference_no: r.reference_no,
+                                    original: false,
                                   })
                                 }
                               >
