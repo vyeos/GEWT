@@ -782,13 +782,17 @@ mod smoke_tests {
             prj_seed_names,
             vec![
                 "ANM",
+                "B.A.",
                 "B.Ed.",
                 "B.Sc.",
+                "Fire & Safety",
                 "GNM",
                 "M.Ed",
                 "M.Sc.",
+                "MSW",
                 "P.B.B.Sc.",
-                "PTC"
+                "PTC",
+                "S.I."
             ],
             "PRJ seed courses stay alphabetized"
         );
