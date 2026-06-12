@@ -719,9 +719,9 @@ mod smoke_tests {
         let s1 = db::create_student(&pool, student_req(PRT, &course.id, "2026-09-01", 1000.0), ADMIN).await?;
         let s2 = db::create_student(&pool, student_req(PRT, &course.id, "2026-09-05", 1000.0), ADMIN).await?;
         let s3 = db::create_student(&pool, student_req(PRT, &course.id, "2025-06-01", 1000.0), ADMIN).await?;
-        assert_eq!(s1.form_no, "PRT-11-1-2026", "first form no");
-        assert_eq!(s2.form_no, "PRT-11-2-2026", "second form no increments");
-        assert_eq!(s3.form_no, "PRT-11-1-2024", "resets in a different academic year");
+        assert_eq!(s1.form_no, "PRJ-11-1-2026", "first form no");
+        assert_eq!(s2.form_no, "PRJ-11-2-2026", "second form no increments");
+        assert_eq!(s3.form_no, "PRJ-11-1-2024", "resets in a different academic year");
 
         let receipt = db::create_receipt(
             &pool,
@@ -737,7 +737,7 @@ mod smoke_tests {
             ADMIN,
         )
         .await?;
-        assert_eq!(receipt.receipt_no, "PRT-12-1-2026", "receipt numbering");
+        assert_eq!(receipt.receipt_no, "PRJ-12-1-2026", "receipt numbering");
 
         // Overpayment is rejected server-side: s1's tuition due so far is 500
         // (period 1 of a 1000/year course) and it is fully paid.
@@ -774,7 +774,7 @@ mod smoke_tests {
             ADMIN,
         )
         .await?;
-        assert_eq!(repay.receipt_no, "PRT-12-2-2026", "replacement receipt gets the next number");
+        assert_eq!(repay.receipt_no, "PRJ-12-2-2026", "replacement receipt gets the next number");
 
         // Decimal amounts are rejected everywhere.
         let decimal_fee =
@@ -835,13 +835,13 @@ mod smoke_tests {
         // must not rewrite already-issued numbers.
         db::update_branch_code(&pool, PRT, "PRX").await?;
         let s1_after = db::load_student(&pool, &s1.id).await?;
-        assert_eq!(s1_after.form_no, "PRT-11-1-2026", "form no frozen after code rename");
+        assert_eq!(s1_after.form_no, "PRJ-11-1-2026", "form no frozen after code rename");
         let receipts_after = db::list_receipts(&pool, None, Some(&s1.id)).await?;
         assert!(
-            receipts_after.iter().any(|r| r.receipt_no == "PRT-12-1-2026"),
+            receipts_after.iter().any(|r| r.receipt_no == "PRJ-12-1-2026"),
             "receipt no frozen"
         );
-        db::update_branch_code(&pool, PRT, "PRT").await?;
+        db::update_branch_code(&pool, PRT, "PRJ").await?;
 
         // Branch moves are blocked on edit.
         let hmt_course_p1 = db::create_course(&pool, course_req(HMT, "HMT-BBA")).await?;
@@ -897,7 +897,7 @@ mod smoke_tests {
         let students2 = db::list_students(&pool2, None, false).await?;
         // Branch-partitioned: PRT students arrived, HMT student untouched.
         assert!(
-            students2.iter().any(|s| s.form_no == "PRT-11-1-2026"),
+            students2.iter().any(|s| s.form_no == "PRJ-11-1-2026"),
             "PRT student present after import"
         );
         assert!(

@@ -207,6 +207,20 @@ async fn migrate_schema(pool: &SqlitePool) -> DbResult<()> {
         .execute(pool)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Rename the original Prantij default code for existing databases, but
+    // only when it still has the old untouched value and PRJ is available.
+    sqlx::query(
+        "UPDATE branches
+         SET code = 'PRJ', updated_at = ?
+         WHERE id = '11111111-1111-1111-1111-111111111111'
+           AND code = 'PRT'
+           AND NOT EXISTS (SELECT 1 FROM branches WHERE code = 'PRJ')",
+    )
+    .bind(now_rfc3339())
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -247,7 +261,7 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
     // import work across independent machines (branch_id references align, and
     // re-seeding never creates a conflicting duplicate).
     for (id, code, name) in [
-        ("11111111-1111-1111-1111-111111111111", "PRT", "Prantij"),
+        ("11111111-1111-1111-1111-111111111111", "PRJ", "Prantij"),
         ("22222222-2222-2222-2222-222222222222", "HMT", "HMT"),
         ("33333333-3333-3333-3333-333333333333", "TLD", "Talod"),
     ] {
