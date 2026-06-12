@@ -77,6 +77,7 @@ export function Admission({
   });
   const [form, setForm] = useState(initialForm);
   const [courseOpen, setCourseOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [printSnapshot, setPrintSnapshot] = useState<PrintableAdmission | null>(
     null,
   );
@@ -158,8 +159,10 @@ export function Admission({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (isSaving) return;
     const print = shouldPrintRef.current;
     shouldPrintRef.current = false;
+    setIsSaving(true);
     try {
       const {
         yearly_fee,
@@ -178,23 +181,31 @@ export function Admission({
         .map((part) => part.trim())
         .filter(Boolean)
         .join(" ");
+      // Only bill the years the course actually runs.
+      const totalYears = selectedCourse
+        ? getCourseDuration(selectedCourse).totalYears
+        : 4;
+      const feeForYear = (year: number, amount: number) =>
+        year <= totalYears ? amount : 0;
       const savedStudent = await api<Student>("/students", token, {
         method: "POST",
         body: JSON.stringify({
           ...studentForm,
           student_name: fullName,
-          fee_year_1: yearly_fee,
-          fee_year_2: yearly_fee,
-          fee_year_3: yearly_fee,
-          fee_year_4: yearly_fee,
-          tuition_fee_year_1: tuition_fee,
-          tuition_fee_year_2: tuition_fee,
-          tuition_fee_year_3: tuition_fee,
-          tuition_fee_year_4: tuition_fee,
-          other_fee_year_1: other_fee,
-          other_fee_year_2: other_fee,
-          other_fee_year_3: other_fee,
-          other_fee_year_4: other_fee,
+          surname,
+          father_name,
+          fee_year_1: feeForYear(1, yearly_fee),
+          fee_year_2: feeForYear(2, yearly_fee),
+          fee_year_3: feeForYear(3, yearly_fee),
+          fee_year_4: feeForYear(4, yearly_fee),
+          tuition_fee_year_1: feeForYear(1, tuition_fee),
+          tuition_fee_year_2: feeForYear(2, tuition_fee),
+          tuition_fee_year_3: feeForYear(3, tuition_fee),
+          tuition_fee_year_4: feeForYear(4, tuition_fee),
+          other_fee_year_1: feeForYear(1, other_fee),
+          other_fee_year_2: feeForYear(2, other_fee),
+          other_fee_year_3: feeForYear(3, other_fee),
+          other_fee_year_4: feeForYear(4, other_fee),
         }),
       });
       cacheStudent(savedStudent).catch(() => {});
@@ -203,7 +214,8 @@ export function Admission({
         setPrintCourse(selectedCourse);
         setPrintBranch(selectedBranch);
         setPrintSnapshot({
-          form_no: form.form_no,
+          // The number the backend actually assigned, not the preview.
+          form_no: savedStudent.form_no,
           admission_date: form.admission_date,
           surname,
           student_name,
@@ -230,6 +242,8 @@ export function Admission({
       if (!print) onSaved();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Admission failed");
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -622,21 +636,23 @@ export function Admission({
             <Button
               type="submit"
               variant="outline"
+              disabled={isSaving}
               onClick={() => {
                 shouldPrintRef.current = false;
               }}
             >
               <UserPlus className="size-4" />
-              Save admission
+              {isSaving ? "Saving..." : "Save admission"}
             </Button>
             <Button
               type="submit"
+              disabled={isSaving}
               onClick={() => {
                 shouldPrintRef.current = true;
               }}
             >
               <Printer className="size-4" />
-              Save & print
+              {isSaving ? "Saving..." : "Save & print"}
             </Button>
           </div>
         </CardContent>

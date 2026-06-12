@@ -60,9 +60,13 @@ export function AdmissionPrint({
           <tbody>
             {courseLine && <Row label="Course" value={courseLine} />}
             {duration && <Row label="Duration" value={duration} />}
-            <Row label="Surname" value={admission.surname} />
+            {admission.surname && (
+              <Row label="Surname" value={admission.surname} />
+            )}
             <Row label="Student's Name" value={admission.student_name} />
-            <Row label="Father's Name" value={admission.father_name} />
+            {admission.father_name && (
+              <Row label="Father's Name" value={admission.father_name} />
+            )}
             <Row label="Category" value={admission.category} />
             {admission.religion && (
               <Row label="Religion" value={admission.religion} />

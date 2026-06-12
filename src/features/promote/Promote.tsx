@@ -188,12 +188,15 @@ export function Promote({
 
     setIsPromoting(true);
     try {
+      // Send only selections that are still visible under the current course
+      // and year — stale ids from an earlier filter would fail the whole batch.
+      const studentIds = selectedStudents.map((student) => student.id);
       const result = await api<PromoteResponse>("/students/promote", token, {
         method: "POST",
         body: JSON.stringify({
           course_id: selectedCourse.id,
           admission_year: Number(admissionYearValue),
-          student_ids: [...selectedIds],
+          student_ids: studentIds,
         }),
       });
       const updatedById = new Map(

@@ -77,6 +77,20 @@ export function createSnapshot(): Promise<{ path: string }> {
   return call<{ path: string }>("create_snapshot");
 }
 
+export type SnapshotEntry = {
+  file_name: string;
+  path: string;
+  modified_at: string;
+};
+
+export function listSnapshots(): Promise<SnapshotEntry[]> {
+  return call<SnapshotEntry[]>("list_snapshots");
+}
+
+export function restoreSnapshot(path: string): Promise<void> {
+  return call<void>("restore_snapshot", { path });
+}
+
 // --- Compatibility dispatcher ----------------------------------------------
 //
 // The feature components were written against a REST-style `api(path, token,

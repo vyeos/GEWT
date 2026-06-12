@@ -1,8 +1,9 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   Check,
   ChevronsUpDown,
+  Printer,
   Save,
   Search,
   UserX,
@@ -53,8 +54,13 @@ import {
   getCurrentCourseYear,
 } from "@/lib/course-duration";
 import { money } from "@/lib/format";
+import { printPage } from "@/lib/print";
 import { cn } from "@/lib/utils";
 import type { Branch, Course, Me, Student } from "@/types";
+import {
+  AdmissionPrint,
+  type PrintableAdmission,
+} from "@/features/admission/AdmissionPrint";
 
 const categories = ["General", "SC", "ST", "OBC", "Others"];
 const genders = ["Male", "Female"];
@@ -65,7 +71,9 @@ type StudentForm = {
   branch_id: string;
   course_id: string;
   current_course_period: number;
+  surname: string;
   student_name: string;
+  father_name: string;
   category: string;
   religion: string;
   caste: string;
@@ -88,14 +96,33 @@ type StudentForm = {
   other_fee_year_4: number;
 };
 
+/// The stored student_name is the combined "surname name father" line. For
+/// students admitted before the parts were stored separately, surname and
+/// father_name are empty and the combined name goes in the middle field.
+function splitStudentName(student: Student) {
+  let name = student.student_name;
+  const surname = student.surname ?? "";
+  const father = student.father_name ?? "";
+  if (surname && name.startsWith(`${surname} `)) {
+    name = name.slice(surname.length + 1);
+  }
+  if (father && name.endsWith(` ${father}`)) {
+    name = name.slice(0, -(father.length + 1));
+  }
+  return { surname, name, father };
+}
+
 function toForm(student: Student): StudentForm {
+  const { surname, name, father } = splitStudentName(student);
   return {
     form_no: student.form_no,
     admission_date: student.admission_date,
     branch_id: student.branch_id,
     course_id: student.course_id,
     current_course_period: student.current_course_period ?? 1,
-    student_name: student.student_name,
+    surname,
+    student_name: name,
+    father_name: father,
     category: student.category,
     religion: student.religion,
     caste: student.caste,
@@ -164,6 +191,10 @@ export function Students({
   const [saving, setSaving] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [printSnapshot, setPrintSnapshot] = useState<PrintableAdmission | null>(
+    null,
+  );
+  const printAfterRenderRef = useRef(false);
 
   const branchCourseGroups = branches
     .map((branch) => ({
@@ -171,6 +202,11 @@ export function Students({
       branchCourses: courses.filter((course) => course.branch_id === branch.id),
     }))
     .filter((group) => group.branchCourses.length > 0);
+  // Students cannot move between branches, so the course picker on the detail
+  // page only offers the student's own branch.
+  const detailsCourseGroups = branchCourseGroups.filter(
+    (group) => group.branch.id === form?.branch_id,
+  );
   const selectedCourse = courses.find((course) => course.id === courseId);
   const selectedBranch = branches.find(
     (branch) => branch.id === selectedCourse?.branch_id,
@@ -265,6 +301,50 @@ export function Students({
     setForm(toForm(student));
   }
 
+  // Wait for the letterhead image to load, then open the print dialog. Mirrors
+  // the admission print flow: the webview prints whatever is in #admission-print.
+  useEffect(() => {
+    if (!printSnapshot || !printAfterRenderRef.current) return;
+    printAfterRenderRef.current = false;
+    const img = document.querySelector<HTMLImageElement>(
+      "#admission-print img",
+    );
+    if (img && !img.complete) {
+      const done = () => {
+        img.removeEventListener("load", done);
+        img.removeEventListener("error", done);
+        void printPage();
+      };
+      img.addEventListener("load", done);
+      img.addEventListener("error", done);
+      return;
+    }
+    requestAnimationFrame(() => void printPage());
+  }, [printSnapshot]);
+
+  function printAdmissionForm() {
+    if (!selectedStudent || !form) return;
+    printAfterRenderRef.current = true;
+    setPrintSnapshot({
+      form_no: selectedStudent.form_no,
+      admission_date: form.admission_date,
+      surname: form.surname,
+      student_name: form.student_name,
+      father_name: form.father_name,
+      category: form.category,
+      religion: form.religion,
+      caste: form.caste,
+      gender: form.gender,
+      aadhar: form.aadhar,
+      address: form.address,
+      student_phone: form.student_phone,
+      parent_phone: form.parent_phone,
+      yearly_fee: form.fee_year_1,
+      tuition_fee: form.tuition_fee_year_1,
+      other_fee: form.other_fee_year_1,
+    });
+  }
+
   function updateForm<K extends keyof StudentForm>(
     field: K,
     value: StudentForm[K],
@@ -277,11 +357,12 @@ export function Students({
     if (!nextCourse) return;
     setForm((current) => {
       if (!current) return current;
+      // The branch never changes on edit; only same-branch courses are offered.
+      if (nextCourse.branch_id !== current.branch_id) return current;
       const maxPeriod = getCourseDuration(nextCourse).totalSemesters;
       return {
         ...current,
         course_id: nextCourse.id,
-        branch_id: nextCourse.branch_id,
         current_course_period: Math.min(
           current.current_course_period,
           maxPeriod,
@@ -319,9 +400,13 @@ export function Students({
 
     setSaving(true);
     try {
+      const fullName = [form.surname, form.student_name, form.father_name]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join(" ");
       const saved = await api<Student>(`/students/${selectedStudent.id}`, token, {
         method: "PATCH",
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, student_name: fullName }),
       });
       setStudents((current) =>
         current.map((student) => (student.id === saved.id ? saved : student)),
@@ -392,6 +477,14 @@ export function Students({
           </Button>
           <div className="flex items-center gap-2">
             {isCancelled && <Badge variant="destructive">Cancelled</Badge>}
+            <Button
+              type="button"
+              variant="outline"
+              onClick={printAdmissionForm}
+            >
+              <Printer className="size-4" />
+              Print admission form
+            </Button>
             <Button type="submit" disabled={saving}>
               <Save className="size-4" />
               {saving ? "Saving..." : "Save changes"}
@@ -413,11 +506,8 @@ export function Students({
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="flex flex-col gap-2">
                 <Label>Form No.</Label>
-                <Input
-                  required
-                  value={form.form_no}
-                  onChange={(e) => updateForm("form_no", e.currentTarget.value)}
-                />
+                {/* Issued once at admission; never editable. */}
+                <Input value={form.form_no} readOnly disabled />
               </div>
               <div className="flex flex-col gap-2">
                 <Label>Admission date</Label>
@@ -463,7 +553,7 @@ export function Students({
                     align="start"
                   >
                     <CourseGroups
-                      groups={branchCourseGroups}
+                      groups={detailsCourseGroups}
                       selectedCourseId={form.course_id}
                       onSelect={(nextCourseId) => {
                         updateCourse(nextCourseId);
@@ -527,8 +617,15 @@ export function Students({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="flex flex-col gap-2 sm:col-span-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="flex flex-col gap-2">
+                <Label>Surname</Label>
+                <Input
+                  value={form.surname}
+                  onChange={(e) => updateForm("surname", e.currentTarget.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
                 <Label>Student name</Label>
                 <Input
                   required
@@ -538,6 +635,18 @@ export function Students({
                   }
                 />
               </div>
+              <div className="flex flex-col gap-2">
+                <Label>Father's name</Label>
+                <Input
+                  value={form.father_name}
+                  onChange={(e) =>
+                    updateForm("father_name", e.currentTarget.value)
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="flex flex-col gap-2">
                 <Label>Category</Label>
                 <Select
@@ -716,6 +825,12 @@ export function Students({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        <AdmissionPrint
+          admission={printSnapshot}
+          course={detailsCourse}
+          branch={detailsBranch}
+        />
       </form>
     );
   }

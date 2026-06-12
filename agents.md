@@ -16,13 +16,20 @@ The stack is:
 - Desktop shell: Tauri 2 in `src-tauri/`
 - Frontend: Vite, React 19, TypeScript, Tailwind CSS 4, shadcn/Radix UI,
   lucide-react icons, sonner toasts
-- API: Rust Axum service in `api/`
-- Database: PostgreSQL via sqlx migrations in `api/migrations/`
+- Data layer: fully local SQLite, owned by the Rust side of the Tauri app
+  (`src-tauri/src/db.rs`). There is no server and no network dependency.
 - Package manager: Bun
 
-The packaged desktop app starts the Rust API inside Tauri. During development
-the frontend talks to `VITE_API_BASE_URL` or defaults to
-`http://localhost:45123` for production.
+The frontend talks to Rust through Tauri commands (`invoke`). The
+`api(path, token, init)` helper in `src/lib/api.ts` is a compatibility
+dispatcher that maps the old REST-style paths onto those commands; the `token`
+argument is ignored (the session lives in Rust memory).
+
+Machines exchange data via "sneakernet" backup files (`.gewtbak`, plain JSON).
+Import is branch-partitioned: each branch in the file replaces that branch's
+local data; other branches are untouched. Admin imports also apply accounts and
+academic settings (newest-wins); employee (branch-restricted) imports apply
+business data only.
 
 ## First Rule: Protect Concurrent Work
 
@@ -41,26 +48,40 @@ Another agent or the user may be changing files at the same time.
 
 ## Repository Map
 
-- `src/App.tsx`: top-level client state, auth token, theme, screen selection,
-  data refresh.
+- `src/App.tsx`: top-level client state, theme, screen selection, data refresh.
 - `src/features/admission/Admission.tsx`: student admission form and form number
   handling.
 - `src/features/receipt/Receipt.tsx`: fee receipt workflow, current fee status,
   optimistic receipt updates.
-- `src/features/outstanding/Outstanding.tsx`: outstanding fee report by batch
-  year and branch.
-- `src/features/utility/Utility.tsx`: admin-only course, user, and academic
-  setting management.
-- `src/components/app/`: app-specific layout and reusable small components.
+- `src/features/outstanding/Outstanding.tsx`: outstanding fee report by course
+  and admission year.
+- `src/features/students/Students.tsx`: admin-only student review/edit, cancel
+  admission, admission form reprint.
+- `src/features/promote/Promote.tsx`: batch promotion to the next
+  semester/term.
+- `src/features/backup/Backup.tsx`: backup export/import and local snapshots
+  (create, list, restore).
+- `src/features/utility/Utility.tsx`: admin-only course, user, branch-code, and
+  academic setting management.
+- `src/components/app/`: app-specific layout components (AppShell).
 - `src/components/ui/`: shadcn/Radix UI primitives. Keep these generic.
-- `src/lib/api.ts`: typed fetch wrapper and API base URL.
+- `src/components/print/PrintPage.tsx`: A4 letterhead print page wrapper.
+- `src/lib/api.ts`: Tauri command wrappers and the REST-path compatibility
+  dispatcher.
 - `src/lib/course-duration.ts`: course duration, billing period, and current
   course year rules.
-- `src/lib/format.ts`: date and INR money formatting.
-- `src/types.ts`: frontend API/domain types.
-- `api/src/lib.rs`: Axum routes, auth, business rules, SQL access.
-- `api/migrations/`: PostgreSQL schema migrations and seed data.
-- `src-tauri/src/lib.rs`: Tauri app setup and embedded API startup.
+- `src/lib/format.ts`: local date, INR money, and amount-in-words formatting.
+- `src/lib/letterhead.ts` + `vite.config.ts`: letterhead manifest and
+  PDF-to-PNG rasterization (letterheads are bundled from `public/letterheads/`
+  at build time).
+- `src/types.ts`: frontend domain types (must match the Rust structs in
+  `src-tauri/src/db.rs`).
+- `src-tauri/src/lib.rs`: Tauri setup, session state, command handlers, auth
+  gates, updater, native macOS printing, smoke tests.
+- `src-tauri/src/db.rs`: SQLite schema, migrations, seeds, and all business
+  rules/SQL.
+- `src-tauri/src/backup.rs`: `.gewtbak` export/import and local snapshot
+  create/list/restore.
 - `public/logo.png` and `src-tauri/icons/`: app branding assets.
 
 ## Local Commands
@@ -69,32 +90,16 @@ Use the existing scripts and tools:
 
 ```bash
 bun install
-bun run dev
-bun run build
-cd api && cargo run
-cd api && cargo check
+bun run dev            # frontend only (most flows need the Tauri backend)
+bun run build          # tsc + vite build
+bun run tauri dev      # the real app
 cd src-tauri && cargo check
-bun run tauri dev
+cd src-tauri && cargo test   # runs the db/backup smoke tests
 ```
 
-API development requires:
-
-```bash
-export DATABASE_URL=postgres://postgres:postgres@localhost:5432/gewt
-export JWT_SECRET=replace-me
-export API_ADDR=127.0.0.1:45123
-cd api && cargo run
-```
-
-The API runs migrations on startup. The seeded admin login is:
-
-```text
-user ID: admin
-password: admin123
-```
-
-Do not assume these credentials are acceptable for production. The README
-already says to rotate the seeded password and `JWT_SECRET`.
+The seeded admin login is user ID `admin`, password `admin123`. It exists only
+for first launch; the admin is expected to rotate it. Never pre-fill or print
+these credentials in the UI.
 
 ## Product Rules
 
@@ -103,56 +108,61 @@ Respect these business constraints unless the user explicitly changes them.
 - Roles are `admin` and `employee`.
 - Admins can see and manage all branches.
 - Employees must have a `branch_id` and can only access their assigned branch.
-- Branches are seeded as `Prantij`, `HMT`, and `Talod`.
+- Branches are seeded as `Prantij`, `HMT`, and `Talod` with STABLE ids
+  (`11111111-…`, `22222222-…`, `33333333-…`) so backup imports align across
+  machines. The default admin id is stable too. Do not change these ids.
 - Courses belong to a branch and have `duration` plus `duration_type` of
-  `year` or `semester`.
-- Admissions create students with a form number, branch, course, full student
-  name, demographic/contact fields, and up to four yearly fee fields.
-- The admission UI composes student full name from surname, student name, and
-  father's name before sending it to the API.
-- Receipts have a numeric receipt number, student, date, fee type, payment mode,
-  amount, and optional reference/remarks.
+  `year` or `semester`. Semester durations must be even. A course with
+  admitted students cannot move to another branch.
+- Admissions create students with a form number, branch, course, name parts
+  (surname / student name / father's name, also stored combined in
+  `student_name`), demographic/contact fields, and up to four yearly fee
+  fields (only the years the course runs are billed).
+- Students can never move between branches after admission.
+- Document numbers follow `{branch-code}-{type-code}-{seq}-{academic-year}`
+  with a per-branch, per-academic-year sequence. They are composed ONCE at
+  creation and stored (`students.form_no`, `receipts.receipt_no`); renaming a
+  branch code or type code only affects future documents. Form and receipt
+  numbers are never editable.
+- Receipts have a student, date, fee type, payment mode, amount, and optional
+  reference/remarks.
 - Payment modes are `Cash`, `UPI`, `DD`, `Cheque`, `NEFT`, and `RTGS`.
 - Non-cash payment modes require a reference/remarks value.
-- Fee types are currently `Tuition` and `Other`.
-- Tuition due is calculated by academic year/semester, using the academic year
-  start month from settings.
-- The default academic year start month is September (`9`).
-- Outstanding reports consider tuition receipts and show only students with
-  pending tuition dues.
+- Fee types are `Tuition` and `Other`. Overpayment beyond the pending amount
+  for a fee type is rejected in the backend, not just clamped in the UI.
+- Dues accrue per period (half the yearly fee per semester/term) up to the
+  student's current period. The academic year start month comes from settings
+  (default September, `9`).
+- Cancelling an admission zeroes the student's fees and hides them from
+  receipts, promotion, and outstanding.
+- Outstanding reports show only students with a pending balance.
 
-When adding or changing business behavior, update both sides if needed:
+When adding or changing business behavior, update both sides in the same
+change:
 
 - Frontend types and UI validation in `src/`
-- Backend request structs, validation, SQL, and migrations in `api/`
+- Backend request structs, validation, and SQL in `src-tauri/src/db.rs`
 
-## API and Database Rules
+## Backend and Database Rules
 
-- Keep branch authorization in the backend. UI filtering is useful, but not a
-  security boundary.
-- Use `claims`, `require_admin`, and `ensure_branch` patterns for protected
-  handlers.
-- Return plain, actionable error text through `ApiError` so frontend toasts stay
-  understandable.
+- Keep branch authorization in the Rust command layer
+  (`require_session`, `require_admin`, `ensure_branch`, `branch_filter` in
+  `src-tauri/src/lib.rs`). UI filtering is useful, but not a security boundary.
+- Return plain, actionable error strings; map raw SQLite constraint errors to
+  friendly text (see `friendly_db_error`).
 - Use sqlx parameter binding. Do not build SQL with user input embedded in
   strings.
-- For schema changes, add a new timestamped migration in `api/migrations/`.
-  Do not edit old migrations after they may have been applied.
-- Keep migrations idempotent where practical with `IF EXISTS`, `IF NOT EXISTS`,
-  or conflict handling.
-- Remember that `api/src/lib.rs` is also compiled into the Tauri app through the
-  `gewt-api` path dependency.
-- Keep the embedded API config path behavior: packaged app reads `.env` from the
-  app config directory, such as
-  `~/Library/Application Support/com.vyeos.gewt/.env` on macOS.
-
-Number generation details:
-
-- Form numbers are currently based on the max numeric `students.form_no` + 1 and
-  formatted with 4-digit padding.
-- Receipt numbers are currently based on max `receipts.receipt_no` + 1.
-- The old `numbering_rules` table has been dropped by migration. Do not
-  reintroduce it casually.
+- Schema changes: extend `create_schema` for fresh databases AND add an
+  idempotent `ALTER TABLE` in `migrate_schema` for existing ones. There are no
+  numbered migration files anymore.
+- Backup format changes: give new fields `#[serde(default)]` in
+  `src-tauri/src/backup.rs` so older `.gewtbak` files still import, and
+  backfill after import if needed. Bump `SCHEMA_VERSION` only for genuinely
+  incompatible changes.
+- Snapshot restore copies shared columns table-by-table so pre-migration
+  snapshots stay restorable. Keep that property.
+- Extend the smoke tests in `src-tauri/src/lib.rs` when touching numbering,
+  backup, or fee logic, and run `cargo test`.
 
 ## Frontend Rules
 
@@ -160,19 +170,21 @@ Number generation details:
 - Use `@/` imports for source files.
 - Prefer existing shadcn/Radix primitives in `src/components/ui/`.
 - Use lucide-react icons for icon buttons and navigation.
-- Keep app-specific reusable pieces in `src/components/app/`.
 - Keep domain workflows in `src/features/<feature>/`.
-- Use `api<T>()` from `src/lib/api.ts` for HTTP calls.
-- Show user-facing success/failure through sonner toasts.
+- Use the helpers in `src/lib/api.ts` for backend calls.
+- Show user-facing success/failure through sonner toasts; never let a save
+  handler reject without a toast.
+- Guard submit handlers against double-clicks (disable while saving).
+- Use `today()` from `src/lib/format.ts` for default dates (local time, not
+  UTC).
 - Preserve the utilitarian desktop-app feel: clear forms, tables, filters, and
   compact workflows over marketing-style UI.
 - Avoid introducing new global state libraries unless the app genuinely needs
   them.
 - Maintain light/dark theme support through the `dark` class and existing CSS
   variables.
-- Keep the UI branch-aware: admins may choose across branches, employees should
-  only see their branch.
-- Do not hard-code backend URLs outside `src/lib/api.ts`.
+- Keep the UI branch-aware: admins may choose across branches, employees only
+  see their branch.
 
 ## Styling Rules
 
@@ -188,30 +200,25 @@ Number generation details:
 
 ## Tauri Rules
 
-- Tauri config lives in `src-tauri/tauri.conf.json`.
+- Tauri config lives in `src-tauri/tauri.conf.json`. A CSP is set for prod and
+  dev (`devCsp`); if you add a new resource type, extend the CSP rather than
+  removing it.
 - The app identifier is `com.vyeos.gewt`.
 - The dev URL is fixed at `http://localhost:1420`; Vite uses strict port 1420.
-- The packaged app bundles update support and points at GitHub release update
-  metadata.
-- `src-tauri/src/lib.rs` currently starts the embedded API during setup.
-- There is still a template `greet` command. Do not rely on it for product
-  behavior; remove or replace it only when the task calls for Tauri command
-  cleanup.
+- The packaged app auto-installs updates at startup (time-capped) and also
+  downloads them in the background from AppShell; updates come from GitHub
+  release metadata.
+- Printing on macOS goes through the native `print_page` command (WKWebView
+  ignores `window.print()`); other platforms use `window.print()`.
+- Local safety snapshots are taken on window close and at most daily on
+  launch; the last 10 are kept in `app_data_dir/backups`.
 
 ## Testing and Verification
 
-There is no dedicated automated test suite in the current repo. Use targeted
-checks according to the files changed:
-
-- Frontend or shared TypeScript changes: `bun run build`
-- API changes: `cd api && cargo check`
-- Tauri integration changes: `cd src-tauri && cargo check`
-- End-to-end desktop behavior: run API plus `bun run dev`, or use
-  `bun run tauri dev` when Tauri behavior matters.
-
-For database changes, test against a PostgreSQL database with `DATABASE_URL`
-set. Because migrations run on startup, a broken migration can block the API
-from launching.
+- Frontend or shared TypeScript changes: `bun run build` (or `bunx tsc --noEmit`)
+- Rust changes: `cd src-tauri && cargo test` (smoke tests cover numbering,
+  fees, backup roundtrips, and snapshot restore)
+- End-to-end desktop behavior: `bun run tauri dev`
 
 ## Change Style
 
@@ -228,11 +235,15 @@ from launching.
 
 ## Known Footguns
 
-- Receipt and form number generation uses max-value queries, so concurrent submissions can still race at the unique constraint. Handle errors clearly if changing this area.
-- Frontend pending-fee calculations and backend outstanding calculations should stay conceptually aligned.
-- `Other` receipts are not part of outstanding tuition dues.
-- Employees must never gain cross-branch data access through a frontend-only filter mistake.
-- Old backup/dropdown/numbering tables were removed by migrations; avoid building new features against them.
+- `.gewtbak` files are plain JSON containing student PII and password hashes.
+  Employee imports intentionally skip accounts/settings; do not "fix" that.
+- Frontend pending-fee calculations (Receipt.tsx) and backend outstanding
+  calculations (db.rs) must stay conceptually aligned.
+- Document numbers are frozen at creation; never recompute them for existing
+  rows except through `backfill_document_numbers` (which only fills empties).
+- Employees must never gain cross-branch data access through a frontend-only
+  filter mistake.
+- Letterheads are bundled at build time; end users cannot add them at runtime.
 
 ## Definition of Done
 
@@ -241,6 +252,7 @@ Before handing work back:
 - Relevant commands have been run, or the reason they were not run is stated.
 - UI changes have been sanity-checked in the actual app when practical.
 - Backend changes preserve auth and branch scoping.
-- Migrations are additive/new files, not edits to historical migrations.
+- Schema changes work for both fresh and existing databases, and old backups
+  still import.
 - No unrelated local changes were reverted or reformatted.
 - The final response summarizes what changed and calls out any remaining risk.

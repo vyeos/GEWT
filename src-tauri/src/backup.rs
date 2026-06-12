@@ -56,10 +56,18 @@ struct RawStudent {
     id: String,
     form_seq: i64,
     form_year: i64,
+    // Introduced after the first release; older backup files won't carry these,
+    // so they default to empty and are backfilled after import.
+    #[serde(default)]
+    form_no: String,
     admission_date: String,
     branch_id: String,
     course_id: String,
     student_name: String,
+    #[serde(default)]
+    surname: String,
+    #[serde(default)]
+    father_name: String,
     category: String,
     religion: String,
     caste: String,
@@ -95,6 +103,8 @@ struct RawReceipt {
     id: String,
     receipt_seq: i64,
     receipt_year: i64,
+    #[serde(default)]
+    receipt_no: String,
     receipt_date: String,
     student_id: String,
     branch_id: String,
@@ -242,7 +252,7 @@ async fn fetch_courses(pool: &SqlitePool, ids: &[String], in_clause: &str) -> Ba
 
 async fn fetch_students(pool: &SqlitePool, ids: &[String], in_clause: &str) -> BackupResult<Vec<RawStudent>> {
     let sql = format!(
-        "SELECT id, form_seq, form_year, admission_date, branch_id, course_id, student_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone,
+        "SELECT id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone,
             fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4,
             current_course_year, current_course_period, admission_cancelled, admission_cancelled_at, admission_cancelled_by, created_by, created_at, updated_at
          FROM students WHERE branch_id IN ({in_clause})"
@@ -256,7 +266,7 @@ async fn fetch_students(pool: &SqlitePool, ids: &[String], in_clause: &str) -> B
 
 async fn fetch_receipts(pool: &SqlitePool, ids: &[String], in_clause: &str) -> BackupResult<Vec<RawReceipt>> {
     let sql = format!(
-        "SELECT id, receipt_seq, receipt_year, receipt_date, student_id, branch_id, fee_type, amount_paid, payment_mode, reference_no, created_by, created_at, updated_at
+        "SELECT id, receipt_seq, receipt_year, receipt_no, receipt_date, student_id, branch_id, fee_type, amount_paid, payment_mode, reference_no, created_by, created_at, updated_at
          FROM receipts WHERE branch_id IN ({in_clause})"
     );
     let mut q = sqlx::query_as::<_, RawReceipt>(&sql);
@@ -305,8 +315,13 @@ pub async fn import_backup(
         .await
         .map_err(|e| e.to_string())?;
 
+    // Config and accounts only flow through admin imports. A branch-restricted
+    // (employee) import applies business data only — otherwise a hand-crafted
+    // backup file could overwrite the admin password hash or global settings.
+    let apply_config_and_accounts = restrict_branch.is_none();
+
     // 1. Config: branches (newest-wins per row).
-    for b in &backup.config.branches {
+    for b in backup.config.branches.iter().filter(|_| apply_config_and_accounts) {
         let local: Option<String> =
             sqlx::query_scalar("SELECT updated_at FROM branches WHERE id = ?")
                 .bind(&b.id)
@@ -335,10 +350,11 @@ pub async fn import_backup(
             .await
             .map_err(|e| e.to_string())?;
     let s = &backup.config.academic_settings;
-    if local_settings
-        .as_deref()
-        .map(|l| s.updated_at.as_str() > l)
-        .unwrap_or(true)
+    if apply_config_and_accounts
+        && local_settings
+            .as_deref()
+            .map(|l| s.updated_at.as_str() > l)
+            .unwrap_or(true)
     {
         sqlx::query(
             "UPDATE academic_settings SET academic_year_start_month = ?, form_type_code = ?, receipt_type_code = ?, updated_at = ? WHERE id = 1",
@@ -353,7 +369,7 @@ pub async fn import_backup(
     }
 
     // 3. Accounts (newest-wins per id).
-    for u in &backup.accounts {
+    for u in backup.accounts.iter().filter(|_| apply_config_and_accounts) {
         let local: Option<String> = sqlx::query_scalar("SELECT updated_at FROM users WHERE id = ?")
             .bind(&u.id)
             .fetch_optional(&mut *tx)
@@ -411,13 +427,13 @@ pub async fn import_backup(
 
     for s in &backup.data.students {
         sqlx::query(
-            "INSERT INTO students (id, form_seq, form_year, admission_date, branch_id, course_id, student_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone,
+            "INSERT INTO students (id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, student_phone, parent_phone,
                 fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4,
                 current_course_year, current_course_period, admission_cancelled, admission_cancelled_at, admission_cancelled_by, created_by, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(&s.id).bind(s.form_seq).bind(s.form_year).bind(&s.admission_date).bind(&s.branch_id).bind(&s.course_id)
-        .bind(&s.student_name).bind(&s.category).bind(&s.religion).bind(&s.caste).bind(&s.gender).bind(&s.aadhar).bind(&s.address).bind(&s.student_phone).bind(&s.parent_phone)
+        .bind(&s.id).bind(s.form_seq).bind(s.form_year).bind(&s.form_no).bind(&s.admission_date).bind(&s.branch_id).bind(&s.course_id)
+        .bind(&s.student_name).bind(&s.surname).bind(&s.father_name).bind(&s.category).bind(&s.religion).bind(&s.caste).bind(&s.gender).bind(&s.aadhar).bind(&s.address).bind(&s.student_phone).bind(&s.parent_phone)
         .bind(s.fee_year_1).bind(s.fee_year_2).bind(s.fee_year_3).bind(s.fee_year_4)
         .bind(s.tuition_fee_year_1).bind(s.tuition_fee_year_2).bind(s.tuition_fee_year_3).bind(s.tuition_fee_year_4)
         .bind(s.other_fee_year_1).bind(s.other_fee_year_2).bind(s.other_fee_year_3).bind(s.other_fee_year_4)
@@ -430,10 +446,10 @@ pub async fn import_backup(
 
     for r in &backup.data.receipts {
         sqlx::query(
-            "INSERT INTO receipts (id, receipt_seq, receipt_year, receipt_date, student_id, branch_id, fee_type, amount_paid, payment_mode, reference_no, created_by, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO receipts (id, receipt_seq, receipt_year, receipt_no, receipt_date, student_id, branch_id, fee_type, amount_paid, payment_mode, reference_no, created_by, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(&r.id).bind(r.receipt_seq).bind(r.receipt_year).bind(&r.receipt_date).bind(&r.student_id).bind(&r.branch_id)
+        .bind(&r.id).bind(r.receipt_seq).bind(r.receipt_year).bind(&r.receipt_no).bind(&r.receipt_date).bind(&r.student_id).bind(&r.branch_id)
         .bind(&r.fee_type).bind(r.amount_paid).bind(&r.payment_mode).bind(&r.reference_no).bind(&r.created_by).bind(&r.created_at).bind(&r.updated_at)
         .execute(&mut *tx)
         .await
@@ -454,6 +470,10 @@ pub async fn import_backup(
     }
 
     tx.commit().await.map_err(|e| e.to_string())?;
+
+    // Rows from pre-freeze backup files arrive with empty document numbers;
+    // compose them once so they're frozen from here on.
+    crate::db::backfill_document_numbers(pool).await?;
 
     Ok(ImportSummary {
         branches: backup.branch_ids,
@@ -509,7 +529,16 @@ fn prune_snapshots(dir: &Path) {
     }
 }
 
+fn is_snapshot_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with("gewt-") && n.ends_with(".db"))
+        .unwrap_or(false)
+}
+
 /// True if there is no snapshot newer than ~24h (used to snapshot on launch).
+/// Only real snapshot files count — stray files like .DS_Store must not
+/// suppress the daily snapshot.
 pub fn needs_daily_snapshot(dir: &Path) -> bool {
     let Ok(read) = std::fs::read_dir(dir) else {
         return true;
@@ -518,6 +547,9 @@ pub fn needs_daily_snapshot(dir: &Path) -> bool {
     let day = std::time::Duration::from_secs(24 * 60 * 60);
     let mut newest: Option<std::time::SystemTime> = None;
     for entry in read.flatten() {
+        if !is_snapshot_file(&entry.path()) {
+            continue;
+        }
         if let Ok(meta) = entry.metadata() {
             if let Ok(modified) = meta.modified() {
                 if newest.map(|n| modified > n).unwrap_or(true) {
@@ -530,4 +562,141 @@ pub fn needs_daily_snapshot(dir: &Path) -> bool {
         Some(t) => now.duration_since(t).map(|d| d > day).unwrap_or(true),
         None => true,
     }
+}
+
+#[derive(Debug, Serialize)]
+pub struct SnapshotEntry {
+    pub file_name: String,
+    pub path: String,
+    pub modified_at: String,
+}
+
+/// The snapshots in the backups folder, newest first.
+pub fn list_snapshots(dir: &Path) -> Vec<SnapshotEntry> {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<SnapshotEntry> = read
+        .flatten()
+        .filter(|e| is_snapshot_file(&e.path()))
+        .filter_map(|e| {
+            let modified: chrono::DateTime<chrono::Local> =
+                e.metadata().ok()?.modified().ok()?.into();
+            Some(SnapshotEntry {
+                file_name: e.file_name().to_string_lossy().to_string(),
+                path: e.path().display().to_string(),
+                modified_at: modified.to_rfc3339(),
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| b.file_name.cmp(&a.file_name));
+    entries
+}
+
+const RESTORE_TABLES: [&str; 8] = [
+    "receipts",
+    "students",
+    "courses",
+    "users",
+    "number_sequences",
+    "academic_settings",
+    "branches",
+    "roles",
+];
+
+/// Replace the live database content with a snapshot's. The copy happens
+/// inside the live pool (ATTACH + per-table copy over shared columns), so the
+/// open connections stay valid. Shared-column copy also tolerates snapshots
+/// taken before a schema migration.
+///
+/// A safety snapshot of the current state is taken first. The target is copied
+/// to a temp file before that, because the safety snapshot's pruning could
+/// otherwise delete the very snapshot being restored.
+pub async fn restore_snapshot(
+    pool: &SqlitePool,
+    db_path: &Path,
+    dir: &Path,
+    snapshot_path: &str,
+) -> BackupResult<()> {
+    let snapshot = PathBuf::from(snapshot_path);
+    let in_backups_dir = snapshot
+        .canonicalize()
+        .ok()
+        .zip(dir.canonicalize().ok())
+        .map(|(file, dir)| file.starts_with(&dir))
+        .unwrap_or(false);
+    if !in_backups_dir || !is_snapshot_file(&snapshot) {
+        return Err("Not a valid snapshot file".to_string());
+    }
+
+    let staging = snapshot.with_extension("db.restoring");
+    std::fs::copy(&snapshot, &staging).map_err(|e| format!("Could not read snapshot: {e}"))?;
+    let result = async {
+        create_snapshot(pool, db_path, dir).await?;
+
+        let mut conn = pool.acquire().await.map_err(|e| e.to_string())?;
+        sqlx::query("ATTACH DATABASE ? AS snap")
+            .bind(staging.display().to_string())
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| format!("Could not open snapshot: {e}"))?;
+        let copied = restore_tables(&mut conn).await;
+        // Always detach, even if the copy failed and rolled back.
+        let _ = sqlx::query("DETACH DATABASE snap").execute(&mut *conn).await;
+        copied
+    }
+    .await;
+    let _ = std::fs::remove_file(&staging);
+    result
+}
+
+async fn restore_tables(conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>) -> BackupResult<()> {
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut **conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    let result = async {
+        sqlx::query("BEGIN").execute(&mut **conn).await.map_err(|e| e.to_string())?;
+        for table in RESTORE_TABLES {
+            // Copy only the columns both schemas share, so older snapshots
+            // restore cleanly after migrations added columns.
+            let live_cols: Vec<String> =
+                sqlx::query_scalar(&format!("SELECT name FROM pragma_table_info('{table}')"))
+                    .fetch_all(&mut **conn)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            let snap_cols: Vec<String> = sqlx::query_scalar(&format!(
+                "SELECT name FROM snap.pragma_table_info('{table}')"
+            ))
+            .fetch_all(&mut **conn)
+            .await
+            .map_err(|e| e.to_string())?;
+            let shared: Vec<String> = live_cols
+                .into_iter()
+                .filter(|c| snap_cols.contains(c))
+                .collect();
+            if shared.is_empty() {
+                continue; // Table absent from the snapshot — leave live data.
+            }
+            let cols = shared.join(", ");
+            sqlx::query(&format!("DELETE FROM {table}"))
+                .execute(&mut **conn)
+                .await
+                .map_err(|e| e.to_string())?;
+            sqlx::query(&format!(
+                "INSERT INTO {table} ({cols}) SELECT {cols} FROM snap.{table}"
+            ))
+            .execute(&mut **conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+        sqlx::query("COMMIT").execute(&mut **conn).await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    .await;
+    if result.is_err() {
+        let _ = sqlx::query("ROLLBACK").execute(&mut **conn).await;
+    }
+    let _ = sqlx::query("PRAGMA foreign_keys = ON").execute(&mut **conn).await;
+    result
 }

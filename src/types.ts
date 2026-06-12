@@ -28,6 +28,7 @@ export type User = {
   name: string;
   role: Role;
   branch_id: string | null;
+  active: boolean;
 };
 
 export type Me = User & {
@@ -50,6 +51,8 @@ export type Student = {
   current_course_year?: number;
   current_course_period?: number;
   student_name: string;
+  surname: string;
+  father_name: string;
   category: string;
   religion: string;
   caste: string;

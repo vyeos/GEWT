@@ -444,6 +444,9 @@ export function Receipt({
       );
       toast.success(`Saved Receipt #${savedReceipt.receipt_no}`);
       handlePrint(savedReceipt);
+      // Clear the money fields so a stray second click can't book a duplicate.
+      setAmount(0);
+      setReference("");
       setReceiptNo("");
       void loadNextReceiptNo();
     } catch (error) {

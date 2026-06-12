@@ -50,6 +50,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, updateBranchCode } from "@/lib/api";
 import { fetchLetterheads, letterheadSrc } from "@/lib/letterhead";
@@ -73,6 +74,7 @@ type UserForm = {
   role: User["role"];
   branch_id: string;
   password: string;
+  active: boolean;
 };
 
 function newCourse(branches: Branch[]): CourseForm {
@@ -92,6 +94,7 @@ function newUser(): UserForm {
     role: "employee",
     branch_id: "",
     password: "",
+    active: true,
   };
 }
 
@@ -129,6 +132,26 @@ export function Utility({
   const [branchCodes, setBranchCodes] = useState<Record<string, string>>(() =>
     Object.fromEntries(branches.map((b) => [b.id, b.code])),
   );
+  // Semester courses must split evenly into years.
+  const courseDurationError =
+    course.duration < 1
+      ? "Duration must be at least 1"
+      : course.duration_type === "semester" && course.duration % 2 !== 0
+        ? "Semester courses must have an even number of semesters"
+        : null;
+
+  // Keep the editable branch-code inputs in sync when a refresh reloads the
+  // branch list (without clobbering codes the admin is currently typing for
+  // other branches).
+  useEffect(() => {
+    setBranchCodes((current) => {
+      const next = { ...current };
+      for (const branch of branches) {
+        if (!(branch.id in next)) next[branch.id] = branch.code;
+      }
+      return next;
+    });
+  }, [branches]);
 
   const filteredUsers = useMemo(() => {
     const term = userSearch.trim().toLowerCase();
@@ -226,54 +249,78 @@ export function Utility({
       role: item.role,
       branch_id: item.branch_id ?? "",
       password: "",
+      active: item.active,
     });
     setUserDialogOpen(true);
   }
 
   async function saveCourse(event: FormEvent) {
     event.preventDefault();
-    const path = editingCourseId ? `/courses/${editingCourseId}` : "/courses";
-    await api(path, token, {
-      method: editingCourseId ? "PATCH" : "POST",
-      body: JSON.stringify({
-        ...course,
-        letterhead: course.letterhead || null,
-      }),
-    });
-    toast.success(editingCourseId ? "Course updated" : "Course saved");
-    resetCourseForm();
-    setCourseDialogOpen(false);
-    onSaved();
+    if (courseDurationError) {
+      toast.error(courseDurationError);
+      return;
+    }
+    try {
+      const path = editingCourseId ? `/courses/${editingCourseId}` : "/courses";
+      await api(path, token, {
+        method: editingCourseId ? "PATCH" : "POST",
+        body: JSON.stringify({
+          ...course,
+          letterhead: course.letterhead || null,
+        }),
+      });
+      toast.success(editingCourseId ? "Course updated" : "Course saved");
+      resetCourseForm();
+      setCourseDialogOpen(false);
+      onSaved();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not save course",
+      );
+    }
   }
 
   async function saveUser(event: FormEvent) {
     event.preventDefault();
-    const path = editingUserId ? `/users/${editingUserId}` : "/users";
-    await api<User>(path, token, {
-      method: editingUserId ? "PATCH" : "POST",
-      body: JSON.stringify({
-        user_id: userForm.user_id,
-        name: userForm.name,
-        role: userForm.role,
-        branch_id:
-          userForm.role === "employee" && userForm.branch_id
-            ? userForm.branch_id
-            : null,
-        password: userForm.password || null,
-      }),
-    });
-    toast.success(editingUserId ? "User updated" : "User created");
-    resetUserForm();
-    setUsers(await api<User[]>("/users", token));
+    try {
+      const path = editingUserId ? `/users/${editingUserId}` : "/users";
+      await api<User>(path, token, {
+        method: editingUserId ? "PATCH" : "POST",
+        body: JSON.stringify({
+          user_id: userForm.user_id,
+          name: userForm.name,
+          role: userForm.role,
+          branch_id:
+            userForm.role === "employee" && userForm.branch_id
+              ? userForm.branch_id
+              : null,
+          password: userForm.password || null,
+          active: userForm.active,
+        }),
+      });
+      toast.success(editingUserId ? "User updated" : "User created");
+      resetUserForm();
+      setUsers(await api<User[]>("/users", token));
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not save user",
+      );
+    }
   }
 
   async function saveSettings() {
-    await api("/academic-settings", token, {
-      method: "PATCH",
-      body: JSON.stringify(settings),
-    });
-    toast.success("Academic settings saved");
-    onSaved();
+    try {
+      await api("/academic-settings", token, {
+        method: "PATCH",
+        body: JSON.stringify(settings),
+      });
+      toast.success("Academic settings saved");
+      onSaved();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not save settings",
+      );
+    }
   }
 
   async function saveBranchCode(branchId: string) {
@@ -436,6 +483,8 @@ export function Utility({
                   <Input
                     type="number"
                     min="1"
+                    step={course.duration_type === "semester" ? 2 : 1}
+                    aria-invalid={Boolean(courseDurationError)}
                     value={course.duration}
                     onChange={(e) =>
                       setCourse({
@@ -444,6 +493,11 @@ export function Utility({
                       })
                     }
                   />
+                  {courseDurationError && (
+                    <p className="text-xs text-destructive">
+                      {courseDurationError}
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label>Duration type</Label>
@@ -520,11 +574,12 @@ export function Utility({
                       <>
                         <p className="font-medium">No letterheads available</p>
                         <p className="text-muted-foreground">
-                          Drop letterhead images into{" "}
+                          Letterheads are bundled with the app. Add images to{" "}
                           <code className="rounded bg-muted px-1 py-0.5 text-xs">
                             public/letterheads/
-                          </code>
-                          , then restart the app.
+                          </code>{" "}
+                          in the project and rebuild the app to make them
+                          available here.
                         </p>
                       </>
                     ) : (
@@ -547,7 +602,7 @@ export function Utility({
                 >
                   Cancel
                 </Button>
-                <Button type="submit">
+                <Button type="submit" disabled={Boolean(courseDurationError)}>
                   <BookOpen className="size-4" />
                   {editingCourseId ? "Update course" : "Save course"}
                 </Button>
@@ -673,13 +728,18 @@ export function Utility({
                             </div>
                           </TableCell>
                           <TableCell>
-                            <Badge
-                              variant={
-                                user.role === "admin" ? "default" : "secondary"
-                              }
-                            >
-                              {user.role === "admin" ? "Admin" : "Employee"}
-                            </Badge>
+                            <div className="flex items-center gap-1.5">
+                              <Badge
+                                variant={
+                                  user.role === "admin" ? "default" : "secondary"
+                                }
+                              >
+                                {user.role === "admin" ? "Admin" : "Employee"}
+                              </Badge>
+                              {!user.active && (
+                                <Badge variant="destructive">Inactive</Badge>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell>
                             <span className="block truncate">{branchName}</span>
@@ -827,6 +887,23 @@ export function Utility({
                     }
                   />
                 </div>
+                {editingUserId && (
+                  <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                    <div>
+                      <p className="text-sm font-medium">Active</p>
+                      <p className="text-xs text-muted-foreground">
+                        Inactive users cannot sign in.
+                      </p>
+                    </div>
+                    <Switch
+                      aria-label="Toggle user active"
+                      checked={userForm.active}
+                      onCheckedChange={(active) =>
+                        setUserForm({ ...userForm, active })
+                      }
+                    />
+                  </div>
+                )}
                 <DialogFooter className="pt-2">
                   <Button
                     type="button"

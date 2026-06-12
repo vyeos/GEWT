@@ -14,8 +14,8 @@ import { login } from "@/lib/api";
 import type { Me } from "@/types";
 
 export function Login({ onLogin }: { onLogin: (me: Me) => void }) {
-  const [userId, setUserId] = useState("admin");
-  const [password, setPassword] = useState("admin123");
+  const [userId, setUserId] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function submit(event: FormEvent) {

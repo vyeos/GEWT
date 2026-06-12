@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Course, Me, Student } from "@/types";
+import type { Me, Student } from "@/types";
 
 // The app is now fully local: the SQLite database IS the source of truth, so
 // the former offline "cache + sync" layer is gone. These helpers are kept so the
@@ -23,21 +23,11 @@ export type CachedReceipt = {
   reference_no: string | null;
 };
 
-export type SyncStatus = {
-  courses: { last_synced: string | null; count: number };
-  students: { last_synced: string | null; count: number };
-  receipts: { last_synced: string | null; count: number };
-};
-
 export function syncScope(me: Me) {
   return me.role === "admin" ? "admin" : `branch:${me.branch_id}`;
 }
 
 const noopSync: SyncResult = { synced_count: 0, is_initial: false };
-
-export function syncCourses(_token?: string, _scopeKey?: string): Promise<SyncResult> {
-  return Promise.resolve(noopSync);
-}
 
 export function syncStudents(_token?: string, _scopeKey?: string): Promise<SyncResult> {
   return Promise.resolve(noopSync);
@@ -45,15 +35,6 @@ export function syncStudents(_token?: string, _scopeKey?: string): Promise<SyncR
 
 export function syncReceipts(_token?: string, _scopeKey?: string): Promise<SyncResult> {
   return Promise.resolve(noopSync);
-}
-
-export async function syncAll(_token?: string, _me?: Me): Promise<SyncResult[]> {
-  return [noopSync, noopSync, noopSync];
-}
-
-export async function getCachedCourses(branchId?: string): Promise<Course[]> {
-  const courses = await invoke<Course[]>("list_courses");
-  return branchId ? courses.filter((c) => c.branch_id === branchId) : courses;
 }
 
 export async function getCachedStudents(branchId?: string): Promise<Student[]> {
@@ -82,17 +63,5 @@ export function cacheStudent(_student: unknown): Promise<void> {
 }
 
 export function cacheReceipt(_receipt: unknown): Promise<void> {
-  return Promise.resolve();
-}
-
-export function getSyncStatus(): Promise<SyncStatus> {
-  return Promise.resolve({
-    courses: { last_synced: null, count: 0 },
-    students: { last_synced: null, count: 0 },
-    receipts: { last_synced: null, count: 0 },
-  });
-}
-
-export function resetCache(): Promise<void> {
   return Promise.resolve();
 }

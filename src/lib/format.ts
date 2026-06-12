@@ -1,5 +1,11 @@
+// Local-time date string (YYYY-MM-DD). toISOString() would be UTC, which is
+// yesterday's date during the early morning in IST.
 export function today() {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 export function money(value: number) {

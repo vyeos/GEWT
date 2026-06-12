@@ -384,6 +384,27 @@ async fn create_snapshot(state: tauri::State<'_, AppState>) -> Result<SnapshotIn
     })
 }
 
+#[tauri::command]
+async fn list_snapshots(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<backup::SnapshotEntry>, String> {
+    state.require_session().await?;
+    Ok(backup::list_snapshots(&backup::backups_dir(&state.data_dir)))
+}
+
+#[tauri::command]
+async fn restore_snapshot(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<(), String> {
+    state.require_session().await?;
+    let dir = backup::backups_dir(&state.data_dir);
+    backup::restore_snapshot(&state.pool, &state.db_path, &dir, &path).await?;
+    // Accounts may differ in the restored data; require a fresh login.
+    *state.session.write().await = None;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Native printing (macOS WKWebView) — unchanged from the original app
 // ---------------------------------------------------------------------------
@@ -470,10 +491,18 @@ async fn install_startup_update<R: tauri::Runtime>(app: &tauri::AppHandle<R>) ->
         return false;
     };
     eprintln!("GEWT update {} is available. Installing.", update.version);
-    match update.download_and_install(|_, _| {}, || {}).await {
-        Ok(()) => true,
-        Err(error) => {
+    // This runs before the window shows; cap the download so a flaky
+    // connection can't stall app launch indefinitely. AppShell retries the
+    // update in the background after startup anyway.
+    let install = update.download_and_install(|_, _| {}, || {});
+    match tokio::time::timeout(Duration::from_secs(180), install).await {
+        Ok(Ok(())) => true,
+        Ok(Err(error)) => {
             eprintln!("GEWT update install failed: {error}");
+            false
+        }
+        Err(_) => {
+            eprintln!("GEWT update download timed out; starting without it.");
             false
         }
     }
@@ -563,6 +592,8 @@ pub fn run() {
             export_backup,
             import_backup,
             create_snapshot,
+            list_snapshots,
+            restore_snapshot,
             print_page,
         ])
         .run(tauri::generate_context!())
@@ -583,6 +614,8 @@ mod smoke_tests {
             branch_id: branch.into(),
             course_id: course.into(),
             student_name: "Test Student".into(),
+            surname: "Test".into(),
+            father_name: "Father".into(),
             category: "General".into(),
             religion: String::new(),
             caste: String::new(),
@@ -647,6 +680,61 @@ mod smoke_tests {
         .await?;
         assert_eq!(receipt.receipt_no, "PRT-12-1-2026", "receipt numbering");
 
+        // Overpayment is rejected server-side: s1's tuition due so far is 500
+        // (period 1 of a 1000/year course) and it is fully paid.
+        let overpay = db::create_receipt(
+            &pool,
+            ReceiptRequest {
+                student_id: s1.id.clone(),
+                receipt_date: "2026-09-03".into(),
+                fee_type: "Tuition".into(),
+                amount_paid: 100.0,
+                payment_mode: "Cash".into(),
+                reference_no: None,
+            },
+            PRT,
+        )
+        .await;
+        assert!(overpay.is_err(), "overpayment must be rejected");
+
+        // Document numbers are frozen at creation: renaming the branch code
+        // must not rewrite already-issued numbers.
+        db::update_branch_code(&pool, PRT, "PRX").await?;
+        let s1_after = db::load_student(&pool, &s1.id).await?;
+        assert_eq!(s1_after.form_no, "PRT-11-1-2026", "form no frozen after code rename");
+        let receipts_after = db::list_receipts(&pool, None, Some(&s1.id)).await?;
+        assert_eq!(receipts_after[0].receipt_no, "PRT-12-1-2026", "receipt no frozen");
+        db::update_branch_code(&pool, PRT, "PRT").await?;
+
+        // Branch moves are blocked on edit.
+        let hmt_course_p1 = db::create_course(&pool, course_req(HMT, "HMT-BBA")).await?;
+        let mut move_req = student_req(HMT, &hmt_course_p1.id, "2026-09-01", 1000.0);
+        move_req.student_name = "Moved".into();
+        let moved = db::update_student(&pool, &s1.id, move_req).await;
+        assert!(moved.is_err(), "moving a student between branches must fail");
+
+        // Semester durations must be even.
+        let mut odd = course_req(PRT, "Odd Course");
+        odd.duration = 3;
+        odd.duration_type = "semester".into();
+        assert!(
+            db::create_course(&pool, odd).await.is_err(),
+            "odd semester count must be rejected"
+        );
+
+        // Snapshot restore: mutate, then roll back to the snapshot.
+        let backups = backup::backups_dir(&tmp);
+        let db_path = db::db_file(&tmp);
+        let snap = backup::create_snapshot(&pool, &db_path, &backups).await?;
+        let extra =
+            db::create_student(&pool, student_req(PRT, &course.id, "2026-09-09", 1000.0)).await?;
+        backup::restore_snapshot(&pool, &db_path, &backups, &snap.display().to_string()).await?;
+        let after_restore = db::list_students(&pool, Some(PRT), true).await?;
+        assert!(
+            !after_restore.iter().any(|s| s.id == extra.id),
+            "restore rolls back to the snapshot"
+        );
+
         // Outstanding: s3 has no receipts, so its first billed period is pending.
         let outstanding = db::outstanding(&pool, None).await?;
         assert!(
@@ -684,6 +772,35 @@ mod smoke_tests {
         backup::import_backup(&pool2, &backup_file, None).await?;
         let prt_count = db::list_students(&pool2, Some(PRT), true).await?.len();
         assert_eq!(prt_count, 3, "re-import replaces, does not duplicate");
+
+        // Branch-restricted (employee) imports apply business data only —
+        // accounts must not cross over.
+        db::create_user(
+            &pool,
+            db::UserRequest {
+                user_id: "emp1".into(),
+                name: "Employee One".into(),
+                role: "employee".into(),
+                branch_id: Some(PRT.into()),
+                password: Some("secret123".into()),
+                active: true,
+            },
+        )
+        .await?;
+        let backup_file2 = tmp.join("prt2.gewtbak");
+        backup::export_backup(&pool, &[PRT.into()], "admin", &backup_file2).await?;
+        backup::import_backup(&pool2, &backup_file2, Some(PRT)).await?;
+        let users2 = db::list_users(&pool2).await?;
+        assert!(
+            !users2.iter().any(|u| u.user_id == "emp1"),
+            "restricted import must not import accounts"
+        );
+        backup::import_backup(&pool2, &backup_file2, None).await?;
+        let users2 = db::list_users(&pool2).await?;
+        assert!(
+            users2.iter().any(|u| u.user_id == "emp1"),
+            "admin import applies accounts"
+        );
 
         Ok(())
     }
