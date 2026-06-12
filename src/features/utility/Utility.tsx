@@ -1183,12 +1183,13 @@ export function Utility({
                     <Label>{branch.name}</Label>
                     <Input
                       value={branchCodes[branch.id] ?? ""}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const value = e.currentTarget.value;
                         setBranchCodes((current) => ({
                           ...current,
-                          [branch.id]: e.currentTarget.value,
-                        }))
-                      }
+                          [branch.id]: value,
+                        }));
+                      }}
                     />
                   </div>
                   <Button
