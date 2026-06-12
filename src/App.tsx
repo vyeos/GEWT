@@ -11,6 +11,7 @@ import { Receipt } from "@/features/receipt/Receipt";
 import { Students } from "@/features/students/Students";
 import { Utility } from "@/features/utility/Utility";
 import { api, currentUser, logout as logoutCommand } from "@/lib/api";
+import { canAccessScreen, firstAccessibleScreen } from "@/lib/access";
 import type { Branch, Course, Me, Screen } from "@/types";
 
 type Theme = "light" | "dark";
@@ -49,6 +50,9 @@ function App() {
         api<Course[]>("/courses", SESSION),
       ]);
       setMe(profile);
+      setScreen((current) =>
+        canAccessScreen(profile, current) ? current : firstAccessibleScreen(profile),
+      );
       setBranches(branchList);
       setCourses(courseList);
       return true;
@@ -141,7 +145,7 @@ function App() {
       onRefresh={() => void refreshCurrentScreen()}
       onLogout={() => void logout()}
     >
-      {screen === "admission" && (
+      {screen === "admission" && canAccessScreen(me, "admission") && (
         <Admission
           token={SESSION}
           me={me}
@@ -150,7 +154,7 @@ function App() {
           onSaved={() => void refreshCurrentScreen()}
         />
       )}
-      {screen === "receipt" && (
+      {screen === "receipt" && canAccessScreen(me, "receipt") && (
         <Receipt
           token={SESSION}
           me={me}
@@ -159,7 +163,7 @@ function App() {
           refreshKey={screenRefreshKey}
         />
       )}
-      {screen === "promote" && (
+      {screen === "promote" && canAccessScreen(me, "promote") && (
         <Promote
           token={SESSION}
           me={me}
@@ -169,7 +173,7 @@ function App() {
           onPromoted={() => void refreshCurrentScreen()}
         />
       )}
-      {screen === "outstanding" && (
+      {screen === "outstanding" && canAccessScreen(me, "outstanding") && (
         <Outstanding
           token={SESSION}
           me={me}
@@ -178,7 +182,7 @@ function App() {
           courses={courses}
         />
       )}
-      {screen === "students" && (
+      {screen === "students" && canAccessScreen(me, "students") && (
         <Students
           token={SESSION}
           me={me}
@@ -188,8 +192,10 @@ function App() {
           onSaved={() => void refreshCurrentScreen()}
         />
       )}
-      {screen === "backup" && <Backup me={me} branches={branches} />}
-      {screen === "utility" && (
+      {screen === "backup" && canAccessScreen(me, "backup") && (
+        <Backup me={me} branches={branches} />
+      )}
+      {screen === "utility" && canAccessScreen(me, "utility") && (
         <Utility
           token={SESSION}
           me={me}

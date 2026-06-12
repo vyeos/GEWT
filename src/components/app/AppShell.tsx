@@ -38,6 +38,7 @@ import {
   downloadUpdate,
   installAndRelaunch,
 } from "@/lib/updater";
+import { canAccessScreen } from "@/lib/access";
 import { cn } from "@/lib/utils";
 import type { Me, Screen } from "@/types";
 import type { UpdateStatus } from "@/lib/updater";
@@ -78,7 +79,6 @@ const nav: {
     label: "Students",
     desc: "Review and edit admissions",
     icon: Users,
-    adminOnly: true,
   },
   {
     key: "backup",
@@ -183,7 +183,11 @@ export function AppShell({
 
         <nav className="flex flex-1 flex-col gap-1 p-2">
           {nav
-            .filter((item) => !item.adminOnly || me.role === "admin")
+            .filter(
+              (item) =>
+                (!item.adminOnly || me.role === "admin") &&
+                canAccessScreen(me, item.key),
+            )
             .map((item) => {
               const Icon = item.icon;
               const active = screen === item.key;

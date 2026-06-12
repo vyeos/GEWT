@@ -375,8 +375,22 @@ export function Students({
     type: "fee" | "tuition" | "other",
     value: string,
   ) {
+    if (isFeeYearLocked(year)) return;
     const field = feeField(type, year);
     updateForm(field, numberValue(value));
+  }
+
+  function isFeeYearLocked(year: number) {
+    if (!selectedStudent || !form || isCancelled) return false;
+    const storedYear = Math.max(
+      Math.ceil(selectedStudent.current_course_period / 2),
+      1,
+    );
+    const requestedYear = Math.max(
+      Math.ceil(form.current_course_period / 2),
+      1,
+    );
+    return year < Math.max(storedYear, requestedYear);
   }
 
   function feeTotalValid(year: number) {
@@ -766,6 +780,7 @@ export function Students({
                 {[1, 2, 3, 4].map((year) => {
                   const total = Number(form[feeField("fee", year)]);
                   const valid = feeTotalValid(year);
+                  const locked = isFeeYearLocked(year);
                   return (
                     <TableRow key={year}>
                       <TableCell className="font-medium">
@@ -777,7 +792,7 @@ export function Students({
                             type="number"
                             min="0"
                             step="1"
-                            disabled={isCancelled}
+                            disabled={isCancelled || locked}
                             value={Number(form[feeField(type, year)])}
                             onChange={(e) =>
                               updateFee(year, type, e.currentTarget.value)
@@ -792,7 +807,11 @@ export function Students({
                           valid ? "text-muted-foreground" : "text-destructive",
                         )}
                       >
-                        {valid ? money(total) : "Split mismatch"}
+                        {locked
+                          ? `Locked - ${money(total)}`
+                          : valid
+                            ? money(total)
+                            : "Split mismatch"}
                       </TableCell>
                     </TableRow>
                   );

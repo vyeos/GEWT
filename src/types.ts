@@ -30,6 +30,11 @@ export type User = {
   role: Role;
   branch_id: string | null;
   active: boolean;
+  can_admission: boolean;
+  can_receipt: boolean;
+  can_outstanding: boolean;
+  can_students: boolean;
+  can_promote: boolean;
 };
 
 export type Me = User & {

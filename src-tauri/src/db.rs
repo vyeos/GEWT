@@ -653,6 +653,29 @@ impl StudentFees {
     }
 }
 
+fn existing_student_fees(student: &Student) -> StudentFees {
+    StudentFees {
+        yearly: [
+            student.fee_year_1,
+            student.fee_year_2,
+            student.fee_year_3,
+            student.fee_year_4,
+        ],
+        tuition: [
+            student.tuition_fee_year_1,
+            student.tuition_fee_year_2,
+            student.tuition_fee_year_3,
+            student.tuition_fee_year_4,
+        ],
+        other: [
+            student.other_fee_year_1,
+            student.other_fee_year_2,
+            student.other_fee_year_3,
+            student.other_fee_year_4,
+        ],
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
@@ -1302,6 +1325,39 @@ fn normalize_student_fees(req: &StudentRequest) -> DbResult<StudentFees> {
     })
 }
 
+fn ensure_passed_year_fees_unchanged(
+    existing: &Student,
+    requested: &StudentFees,
+    requested_period: i64,
+) -> DbResult<()> {
+    if existing.admission_cancelled {
+        return Ok(());
+    }
+
+    let existing_year = current_course_year_from_period(existing.current_course_period);
+    let requested_year = current_course_year_from_period(requested_period);
+    let completed_years = existing_year.max(requested_year).saturating_sub(1);
+    if completed_years == 0 {
+        return Ok(());
+    }
+
+    let stored = existing_student_fees(existing);
+    let locked_years = completed_years.min(4) as usize;
+    for year in 1..=locked_years {
+        let index = year - 1;
+        if stored.yearly[index] != requested.yearly[index]
+            || stored.tuition[index] != requested.tuition[index]
+            || stored.other[index] != requested.other[index]
+        {
+            return Err(format!(
+                "Year {year} fee cannot be changed after the student has passed that year"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn create_student(
     pool: &SqlitePool,
     req: StudentRequest,
@@ -1399,6 +1455,7 @@ pub async fn update_student(pool: &SqlitePool, id: &str, req: StudentRequest) ->
             .unwrap_or(existing.current_course_period),
         &course,
     )?;
+    ensure_passed_year_fees_unchanged(&existing, &fees, period)?;
     let year = current_course_year_from_period(period);
 
     // Form numbering is assigned once at admission and never changes on edit.

@@ -660,7 +660,7 @@ pub fn run() {
 #[cfg(test)]
 mod smoke_tests {
     use crate::backup;
-    use crate::db::{self, CourseRequest, ReceiptRequest, StudentRequest};
+    use crate::db::{self, CourseRequest, PromoteRequest, ReceiptRequest, StudentRequest};
 
     const PRT: &str = "11111111-1111-1111-1111-111111111111";
     const HMT: &str = "22222222-2222-2222-2222-222222222222";
@@ -980,6 +980,57 @@ mod smoke_tests {
         );
 
         Ok(())
+    }
+
+    async fn completed_year_fee_lock_run() -> Result<(), String> {
+        let tmp = std::env::temp_dir().join(format!("gewt-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let pool = db::init_db(&tmp).await?;
+        let course = db::create_course(&pool, course_req(PRT, "Fee Lock")).await?;
+        let student = db::create_student(
+            &pool,
+            student_req(PRT, &course.id, "2026-09-01", 1000.0),
+            ADMIN,
+        )
+        .await?;
+
+        for _ in 0..2 {
+            db::promote_students(
+                &pool,
+                PromoteRequest {
+                    course_id: course.id.clone(),
+                    admission_year: 2026,
+                    student_ids: vec![student.id.clone()],
+                },
+            )
+            .await?;
+        }
+
+        let mut locked_fee_req = student_req(PRT, &course.id, "2026-09-01", 1200.0);
+        locked_fee_req.current_course_period = Some(3);
+        let locked_fee = db::update_student(&pool, &student.id, locked_fee_req).await;
+        assert!(
+            locked_fee.is_err(),
+            "fees for a completed year must not be editable"
+        );
+
+        let mut current_year_fee_req = student_req(PRT, &course.id, "2026-09-01", 1000.0);
+        current_year_fee_req.current_course_period = Some(3);
+        current_year_fee_req.fee_year_2 = 1200.0;
+        let current_year_fee =
+            db::update_student(&pool, &student.id, current_year_fee_req).await?;
+        assert_eq!(
+            current_year_fee.fee_year_2, 1200.0,
+            "current year fee remains editable"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn completed_year_fee_lock() {
+        tauri::async_runtime::block_on(completed_year_fee_lock_run())
+            .expect("completed year fee lock test failed");
     }
 
     #[test]
