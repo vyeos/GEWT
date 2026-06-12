@@ -664,6 +664,7 @@ mod smoke_tests {
 
     const PRT: &str = "11111111-1111-1111-1111-111111111111";
     const HMT: &str = "22222222-2222-2222-2222-222222222222";
+    const TLD: &str = "33333333-3333-3333-3333-333333333333";
     const ADMIN: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 
     fn student_req(branch: &str, course: &str, date: &str, fee: f64) -> StudentRequest {
@@ -712,6 +713,45 @@ mod smoke_tests {
         let tmp = std::env::temp_dir().join(format!("gewt-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
         let pool = db::init_db(&tmp).await?;
+
+        let prj_seed_courses = db::list_courses(&pool, Some(PRT), false).await?;
+        let prj_seed_names: Vec<&str> = prj_seed_courses
+            .iter()
+            .map(|course| course.name.as_str())
+            .collect();
+        assert_eq!(
+            prj_seed_names,
+            vec![
+                "ANM",
+                "B.Ed.",
+                "B.Sc.",
+                "GNM",
+                "M.Ed",
+                "M.Sc.",
+                "P.B.B.Sc.",
+                "PTC"
+            ],
+            "PRJ seed courses stay alphabetized"
+        );
+        let bsc = prj_seed_courses
+            .iter()
+            .find(|course| course.name == "B.Sc.")
+            .unwrap();
+        assert_eq!((bsc.duration, bsc.duration_type.as_str()), (8, "semester"));
+        let gnm = prj_seed_courses
+            .iter()
+            .find(|course| course.name == "GNM")
+            .unwrap();
+        assert_eq!((gnm.duration, gnm.duration_type.as_str()), (3, "year"));
+
+        for branch in [HMT, TLD] {
+            let seed_names: Vec<String> = db::list_courses(&pool, Some(branch), false)
+                .await?
+                .into_iter()
+                .map(|course| course.name)
+                .collect();
+            assert_eq!(seed_names, vec!["B.Sc.", "GNM", "P.B.B.Sc."]);
+        }
 
         let course = db::create_course(&pool, course_req(PRT, "BCA")).await?;
 

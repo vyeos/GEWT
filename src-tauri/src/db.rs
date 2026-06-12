@@ -256,14 +256,18 @@ pub async fn backfill_document_numbers(pool: &SqlitePool) -> DbResult<()> {
 async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
     let now = now_rfc3339();
 
+    const PRJ: &str = "11111111-1111-1111-1111-111111111111";
+    const HMT: &str = "22222222-2222-2222-2222-222222222222";
+    const TLD: &str = "33333333-3333-3333-3333-333333333333";
+
     // Branches use STABLE, deterministic ids so that the same branch has the
     // same id on every machine. This is what makes branch-partitioned backup
     // import work across independent machines (branch_id references align, and
     // re-seeding never creates a conflicting duplicate).
     for (id, code, name) in [
-        ("11111111-1111-1111-1111-111111111111", "PRJ", "Prantij"),
-        ("22222222-2222-2222-2222-222222222222", "HMT", "HMT"),
-        ("33333333-3333-3333-3333-333333333333", "TLD", "Talod"),
+        (PRJ, "PRJ", "Prantij"),
+        (HMT, "HMT", "HMT"),
+        (TLD, "TLD", "Talod"),
     ] {
         sqlx::query(
             "INSERT OR IGNORE INTO branches (id, code, name, updated_at) VALUES (?, ?, ?, ?)",
@@ -275,6 +279,38 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
         .execute(pool)
         .await
         .map_err(|e| e.to_string())?;
+    }
+
+    // Initial course catalog, ordered alphabetically within each branch.
+    for (id, branch_id, name, duration, duration_type) in [
+        ("11111111-1111-1111-1111-000000000001", PRJ, "ANM", 2, "year"),
+        ("11111111-1111-1111-1111-000000000002", PRJ, "B.Ed.", 4, "semester"),
+        ("11111111-1111-1111-1111-000000000003", PRJ, "B.Sc.", 8, "semester"),
+        ("11111111-1111-1111-1111-000000000004", PRJ, "GNM", 3, "year"),
+        ("11111111-1111-1111-1111-000000000005", PRJ, "M.Ed", 4, "semester"),
+        ("11111111-1111-1111-1111-000000000006", PRJ, "M.Sc.", 4, "semester"),
+        ("11111111-1111-1111-1111-000000000007", PRJ, "P.B.B.Sc.", 4, "semester"),
+        ("11111111-1111-1111-1111-000000000008", PRJ, "PTC", 2, "year"),
+        ("22222222-2222-2222-2222-000000000001", HMT, "B.Sc.", 8, "semester"),
+        ("22222222-2222-2222-2222-000000000002", HMT, "GNM", 3, "year"),
+        ("22222222-2222-2222-2222-000000000003", HMT, "P.B.B.Sc.", 4, "semester"),
+        ("33333333-3333-3333-3333-000000000001", TLD, "B.Sc.", 8, "semester"),
+        ("33333333-3333-3333-3333-000000000002", TLD, "GNM", 3, "year"),
+        ("33333333-3333-3333-3333-000000000003", TLD, "P.B.B.Sc.", 4, "semester"),
+    ] {
+        sqlx::query(
+            "INSERT OR IGNORE INTO courses (id, branch_id, name, duration, duration_type, letterhead, active, updated_at)
+             VALUES (?, ?, ?, ?, ?, NULL, 1, ?)",
+        )
+        .bind(id)
+        .bind(branch_id)
+        .bind(name)
+        .bind(duration)
+        .bind(duration_type)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .map_err(friendly_db_error)?;
     }
 
     sqlx::query(
