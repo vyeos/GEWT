@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { LETTERHEAD_FALLBACK, letterheadSrc } from "@/lib/letterhead";
+import { cn } from "@/lib/utils";
 import type { Course } from "@/types";
 
 /**
@@ -20,6 +21,12 @@ export function PrintPage({
   letterhead: Course["letterhead"] | undefined;
   children: ReactNode;
 }) {
+  const [usingFallback, setUsingFallback] = useState(!letterhead);
+
+  useEffect(() => {
+    setUsingFallback(!letterhead);
+  }, [letterhead]);
+
   return (
     <div className="relative h-[297mm] w-[210mm] overflow-hidden bg-white font-serif text-black">
       <img
@@ -28,9 +35,13 @@ export function PrintPage({
         // Fill the page exactly. No bleed: any overflow past 297mm makes WebKit's
         // print engine fragment the oversized box onto a blank 2nd page (the
         // page box is clamped to A4 in App.css, so the four edges already meet it).
-        className="absolute inset-0 h-full w-full object-fill"
+        className={cn(
+          "absolute inset-0 h-full w-full object-fill",
+          usingFallback && "opacity-5",
+        )}
         onError={(e) => {
           if (e.currentTarget.src.endsWith(LETTERHEAD_FALLBACK)) return;
+          setUsingFallback(true);
           e.currentTarget.src = LETTERHEAD_FALLBACK;
         }}
       />
