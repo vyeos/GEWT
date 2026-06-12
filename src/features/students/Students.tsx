@@ -266,6 +266,18 @@ export function Students({
         : [],
     [detailsCourse],
   );
+  // Fee rows only run for the course's actual number of years (no_of_sems / 2),
+  // capped at the four stored fee_year_* columns.
+  const detailYears = useMemo(
+    () =>
+      detailsCourse
+        ? Array.from(
+            { length: Math.min(getCourseDuration(detailsCourse).totalYears, 4) },
+            (_, index) => index + 1,
+          )
+        : [],
+    [detailsCourse],
+  );
   const isCancelled = selectedStudent?.admission_cancelled ?? false;
 
   useEffect(() => {
@@ -828,7 +840,7 @@ export function Students({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {[1, 2, 3, 4].map((year) => {
+                {detailYears.map((year) => {
                   const total = Number(form[feeField("fee", year)]);
                   const valid = feeTotalValid(year);
                   const locked = isFeeYearLocked(year);
