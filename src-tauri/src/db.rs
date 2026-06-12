@@ -296,6 +296,65 @@ async fn migrate_schema(pool: &SqlitePool) -> DbResult<()> {
     .execute(pool)
     .await
     .map_err(|e| e.to_string())?;
+
+    // Backfill letterheads onto the originally seeded courses, which shipped
+    // with letterhead = NULL. Keyed by the stable seed ids so user-renamed
+    // courses still match, and guarded on letterhead IS NULL so an admin's
+    // later manual choice is never overwritten.
+    for (id, letterhead) in [
+        ("11111111-1111-1111-1111-000000000001", "PRJ-ANM-GNM.png"),
+        ("11111111-1111-1111-1111-000000000002", "PRJ-B.Ed.png"),
+        (
+            "11111111-1111-1111-1111-000000000003",
+            "PRJ-BSc-MSc-PBBSc.png",
+        ),
+        ("11111111-1111-1111-1111-000000000004", "PRJ-ANM-GNM.png"),
+        ("11111111-1111-1111-1111-000000000005", "PRJ-M.Ed.png"),
+        (
+            "11111111-1111-1111-1111-000000000006",
+            "PRJ-BSc-MSc-PBBSc.png",
+        ),
+        (
+            "11111111-1111-1111-1111-000000000007",
+            "PRJ-BSc-MSc-PBBSc.png",
+        ),
+        ("11111111-1111-1111-1111-000000000008", "PRJ-ptc.png"),
+        (
+            "22222222-2222-2222-2222-000000000001",
+            "HMT-PBBSc-B.Sc-GNM.png",
+        ),
+        (
+            "22222222-2222-2222-2222-000000000002",
+            "HMT-PBBSc-B.Sc-GNM.png",
+        ),
+        (
+            "22222222-2222-2222-2222-000000000003",
+            "HMT-PBBSc-B.Sc-GNM.png",
+        ),
+        (
+            "33333333-3333-3333-3333-000000000001",
+            "TLD-B.Sc-PBBSc-GNM.png",
+        ),
+        (
+            "33333333-3333-3333-3333-000000000002",
+            "TLD-B.Sc-PBBSc-GNM.png",
+        ),
+        (
+            "33333333-3333-3333-3333-000000000003",
+            "TLD-B.Sc-PBBSc-GNM.png",
+        ),
+    ] {
+        sqlx::query(
+            "UPDATE courses SET letterhead = ?, updated_at = ?
+             WHERE id = ? AND letterhead IS NULL",
+        )
+        .bind(letterhead)
+        .bind(now_rfc3339())
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -373,13 +432,26 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
     }
 
     // Initial course catalog, ordered alphabetically within each branch.
-    for (id, branch_id, name, duration, duration_type) in [
+    // Letterheads live in public/letterheads/ and are named Branch-Courses.png.
+    // A single sheet often covers several programs, so those courses share one
+    // file: ANM/GNM -> PRJ-ANM-GNM.png, B.Sc./M.Sc./P.B.B.Sc. -> PRJ-BSc-MSc-PBBSc.png,
+    // and each of HMT/TLD has one combined nursing sheet for all its courses.
+    for (id, branch_id, name, duration, duration_type, letterhead) in [
         (
             "11111111-1111-1111-1111-000000000001",
             PRJ,
             "ANM",
             2,
             "year",
+            "PRJ-ANM-GNM.png",
+        ),
+        (
+            "11111111-1111-1111-1111-000000000009",
+            PRJ,
+            "B.A.",
+            6,
+            "semester",
+            "PRJ-BA.png",
         ),
         (
             "11111111-1111-1111-1111-000000000002",
@@ -387,6 +459,7 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "B.Ed.",
             4,
             "semester",
+            "PRJ-B.Ed.png",
         ),
         (
             "11111111-1111-1111-1111-000000000003",
@@ -394,6 +467,15 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "B.Sc.",
             8,
             "semester",
+            "PRJ-BSc-MSc-PBBSc.png",
+        ),
+        (
+            "11111111-1111-1111-1111-000000000010",
+            PRJ,
+            "Fire & Safety",
+            1,
+            "year",
+            "PRJ-fire-and-safety.png",
         ),
         (
             "11111111-1111-1111-1111-000000000004",
@@ -401,6 +483,7 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "GNM",
             3,
             "year",
+            "PRJ-ANM-GNM.png",
         ),
         (
             "11111111-1111-1111-1111-000000000005",
@@ -408,6 +491,7 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "M.Ed",
             4,
             "semester",
+            "PRJ-M.Ed.png",
         ),
         (
             "11111111-1111-1111-1111-000000000006",
@@ -415,6 +499,15 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "M.Sc.",
             4,
             "semester",
+            "PRJ-BSc-MSc-PBBSc.png",
+        ),
+        (
+            "11111111-1111-1111-1111-000000000011",
+            PRJ,
+            "MSW",
+            2,
+            "year",
+            "PRJ-MSW.png",
         ),
         (
             "11111111-1111-1111-1111-000000000007",
@@ -422,6 +515,7 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "P.B.B.Sc.",
             4,
             "semester",
+            "PRJ-BSc-MSc-PBBSc.png",
         ),
         (
             "11111111-1111-1111-1111-000000000008",
@@ -429,6 +523,15 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "PTC",
             2,
             "year",
+            "PRJ-ptc.png",
+        ),
+        (
+            "11111111-1111-1111-1111-000000000012",
+            PRJ,
+            "S.I.",
+            1,
+            "year",
+            "PRJ-sanitary-inspector.png",
         ),
         (
             "22222222-2222-2222-2222-000000000001",
@@ -436,6 +539,7 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "B.Sc.",
             8,
             "semester",
+            "HMT-PBBSc-B.Sc-GNM.png",
         ),
         (
             "22222222-2222-2222-2222-000000000002",
@@ -443,6 +547,7 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "GNM",
             3,
             "year",
+            "HMT-PBBSc-B.Sc-GNM.png",
         ),
         (
             "22222222-2222-2222-2222-000000000003",
@@ -450,6 +555,7 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "P.B.B.Sc.",
             4,
             "semester",
+            "HMT-PBBSc-B.Sc-GNM.png",
         ),
         (
             "33333333-3333-3333-3333-000000000001",
@@ -457,6 +563,7 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "B.Sc.",
             8,
             "semester",
+            "TLD-B.Sc-PBBSc-GNM.png",
         ),
         (
             "33333333-3333-3333-3333-000000000002",
@@ -464,6 +571,7 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "GNM",
             3,
             "year",
+            "TLD-B.Sc-PBBSc-GNM.png",
         ),
         (
             "33333333-3333-3333-3333-000000000003",
@@ -471,17 +579,19 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "P.B.B.Sc.",
             4,
             "semester",
+            "TLD-B.Sc-PBBSc-GNM.png",
         ),
     ] {
         sqlx::query(
             "INSERT OR IGNORE INTO courses (id, branch_id, name, duration, duration_type, letterhead, active, updated_at)
-             VALUES (?, ?, ?, ?, ?, NULL, 1, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
         )
         .bind(id)
         .bind(branch_id)
         .bind(name)
         .bind(duration)
         .bind(duration_type)
+        .bind(letterhead)
         .bind(&now)
         .execute(pool)
         .await

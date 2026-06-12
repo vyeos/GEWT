@@ -1,6 +1,6 @@
 [package]
 name = "gewt"
-version = "0.3.6"
+version = "0.3.7"
 description = "GEWT Fee Management"
 authors = ["rudra"]
 edition = "2021"
