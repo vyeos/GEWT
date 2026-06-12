@@ -72,13 +72,9 @@ export function ReceiptPrint({
             <UnderlinedValue value={receiptWords(receipt.amount_paid)} />
           </div>
 
-          <div className="mb-7 grid grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,0.7fr)_auto_minmax(0,0.7fr)_auto_auto] items-end gap-x-3">
+          <div className="mb-7 grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-end gap-x-3">
             <span>by</span>
             <UnderlinedValue value={paymentDetail} />
-            <span>Dated</span>
-            <UnderlinedValue value={displayDate(receipt.receipt_date)} />
-            <span>Drawn on</span>
-            <UnderlinedValue value={receipt.fee_type || "Tuition"} />
             <span>Yr.</span>
             <UnderlinedValue value={receiptYear} />
           </div>
