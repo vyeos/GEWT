@@ -861,18 +861,18 @@ export function Receipt({
                   No payment history found
                 </p>
               ) : (
-                <Table className="table-fixed">
+                <Table className="min-w-[820px] table-fixed">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-[14%]">Receipt No</TableHead>
-                      <TableHead className="w-[16%]">Date</TableHead>
-                      <TableHead className="w-[13%]">Fee Type</TableHead>
-                      <TableHead className="w-[12%]">Mode</TableHead>
-                      <TableHead className="w-[14%] text-right">
+                      <TableHead className="w-40">Receipt No</TableHead>
+                      <TableHead className="w-28">Date</TableHead>
+                      <TableHead className="w-24">Fee Type</TableHead>
+                      <TableHead className="w-20">Mode</TableHead>
+                      <TableHead className="w-28 text-right">
                         Amount
                       </TableHead>
-                      <TableHead className="w-[17%]">Remarks</TableHead>
-                      <TableHead className="w-[14%] text-right">
+                      <TableHead>Remarks</TableHead>
+                      <TableHead className="w-28 text-right">
                         Actions
                       </TableHead>
                     </TableRow>
@@ -884,7 +884,10 @@ export function Receipt({
                         className={cn(r.cancelled && "opacity-60")}
                       >
                         <TableCell
-                          className={cn(r.cancelled && "line-through")}
+                          className={cn(
+                            "font-medium",
+                            r.cancelled && "line-through",
+                          )}
                         >
                           {r.receipt_no}
                         </TableCell>
@@ -899,7 +902,14 @@ export function Receipt({
                         >
                           {money(r.amount_paid)}
                         </TableCell>
-                        <TableCell>{r.reference_no || "—"}</TableCell>
+                        <TableCell>
+                          <span
+                            className="block max-w-44 truncate"
+                            title={r.reference_no || undefined}
+                          >
+                            {r.reference_no || "—"}
+                          </span>
+                        </TableCell>
                         <TableCell className="text-right">
                           {r.cancelled ? (
                             <Badge variant="destructive">Cancelled</Badge>
@@ -956,7 +966,7 @@ export function Receipt({
                   No fee information available
                 </p>
               ) : (
-                <Table className="table-fixed">
+                <Table className="min-w-[520px] table-fixed">
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-[22%]">Fee Type</TableHead>
