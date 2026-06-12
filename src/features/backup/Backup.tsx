@@ -243,9 +243,12 @@ export function Backup({ me, branches }: { me: Me; branches: Branch[] }) {
           </CardTitle>
           <CardDescription>
             A timestamped copy of the database is saved automatically when you
-            close the app (and once a day on launch). The last 10 are kept on
-            this machine and never leave it. You can also take one now, or
-            restore the database back to an earlier snapshot.
+            close the app (and once a day on launch). The 5 most recent copies
+            are kept, plus the last copy from each of the previous 10 days —
+            all on this machine only. You can also take one now
+            {isAdmin
+              ? ", or restore the database back to an earlier snapshot."
+              : ". Restoring a snapshot requires an administrator."}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -268,7 +271,9 @@ export function Backup({ me, branches }: { me: Me; branches: Branch[] }) {
                 <TableRow>
                   <TableHead>Snapshot</TableHead>
                   <TableHead>Taken</TableHead>
-                  <TableHead className="text-right">Restore</TableHead>
+                  {isAdmin && (
+                    <TableHead className="text-right">Restore</TableHead>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -280,18 +285,20 @@ export function Backup({ me, branches }: { me: Me; branches: Branch[] }) {
                     <TableCell>
                       {formatSnapshotDate(snapshot.modified_at)}
                     </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => void handleRestore(snapshot)}
-                      >
-                        <ArchiveRestore className="size-4" />
-                        Restore
-                      </Button>
-                    </TableCell>
+                    {isAdmin && (
+                      <TableCell className="text-right">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => void handleRestore(snapshot)}
+                        >
+                          <ArchiveRestore className="size-4" />
+                          Restore
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>

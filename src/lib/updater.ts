@@ -4,7 +4,6 @@ import { check } from "@tauri-apps/plugin-updater";
 export type UpdateStatus =
   | { state: "idle" }
   | { state: "checking" }
-  | { state: "available"; version: string; body: string | undefined }
   | { state: "downloading"; progress: number }
   | { state: "ready" }
   | { state: "up-to-date" }
@@ -12,8 +11,6 @@ export type UpdateStatus =
 
 export async function checkForUpdate(): Promise<{
   available: boolean;
-  version?: string;
-  body?: string;
   update?: Awaited<ReturnType<typeof check>>;
 }> {
   const update = await check();
@@ -22,12 +19,7 @@ export async function checkForUpdate(): Promise<{
     return { available: false };
   }
 
-  return {
-    available: true,
-    version: update.version,
-    body: update.body ?? undefined,
-    update,
-  };
+  return { available: true, update };
 }
 
 export async function downloadUpdate(

@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import "./App.css";
 import { AppShell } from "@/components/app/AppShell";
-import { branchesSeed } from "@/data/seeds";
 import { Admission } from "@/features/admission/Admission";
 import { Backup } from "@/features/backup/Backup";
 import { Login } from "@/features/login/Login";
@@ -35,7 +34,7 @@ function getInitialTheme(): Theme {
 function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [screen, setScreen] = useState<Screen>("admission");
-  const [branches, setBranches] = useState<Branch[]>(branchesSeed);
+  const [branches, setBranches] = useState<Branch[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(false);
   const [restoringSession, setRestoringSession] = useState(true);
@@ -195,7 +194,6 @@ function App() {
           token={SESSION}
           me={me}
           branches={branches}
-          courses={courses}
           refreshKey={screenRefreshKey}
           onSaved={() => void refreshCurrentScreen()}
         />

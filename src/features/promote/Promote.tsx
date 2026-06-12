@@ -380,10 +380,7 @@ export function Promote({
               </TableHeader>
               <TableBody>
                 {visibleStudents.map((student) => {
-                  const currentYear = getCurrentCourseYear(
-                    student,
-                    me.academic_year_start_month,
-                  );
+                  const currentYear = getCurrentCourseYear(student);
                   const currentPeriod = getCurrentCoursePeriod(student);
                   const totalPeriods = getCourseDuration(student).totalSemesters;
                   const eligible = currentPeriod < totalPeriods;

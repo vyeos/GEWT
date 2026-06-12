@@ -120,9 +120,21 @@ async fn update_branch(
 }
 
 #[tauri::command]
-async fn list_courses(state: tauri::State<'_, AppState>) -> Result<Vec<Course>, String> {
+async fn list_courses(
+    state: tauri::State<'_, AppState>,
+    include_archived: Option<bool>,
+) -> Result<Vec<Course>, String> {
     let session = state.require_session().await?;
-    db::list_courses(&state.pool, branch_filter(&session).as_deref()).await
+    let include_archived = include_archived.unwrap_or(false);
+    if include_archived && session.role != "admin" {
+        return Err("Admin access required".to_string());
+    }
+    db::list_courses(
+        &state.pool,
+        branch_filter(&session).as_deref(),
+        include_archived,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -144,6 +156,27 @@ async fn update_course(
     db::update_course(&state.pool, &id, req).await
 }
 
+#[tauri::command]
+async fn archive_course(state: tauri::State<'_, AppState>, id: String) -> Result<Course, String> {
+    state.require_admin().await?;
+    db::set_course_active(&state.pool, &id, false).await
+}
+
+#[tauri::command]
+async fn unarchive_course(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<Course, String> {
+    state.require_admin().await?;
+    db::set_course_active(&state.pool, &id, true).await
+}
+
+#[tauri::command]
+async fn delete_course(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    state.require_admin().await?;
+    db::delete_course(&state.pool, &id).await
+}
+
 // ---------------------------------------------------------------------------
 // Students
 // ---------------------------------------------------------------------------
@@ -162,24 +195,13 @@ async fn list_students(
 }
 
 #[tauri::command]
-async fn get_student(state: tauri::State<'_, AppState>, id: String) -> Result<Student, String> {
-    let session = state.require_session().await?;
-    let student = db::load_student(&state.pool, &id).await?;
-    if student.admission_cancelled && session.role != "admin" {
-        return Err("You don't have access to this student".to_string());
-    }
-    ensure_branch(&session, &student.branch_id)?;
-    Ok(student)
-}
-
-#[tauri::command]
 async fn create_student(
     state: tauri::State<'_, AppState>,
     req: StudentRequest,
 ) -> Result<Student, String> {
     let session = state.require_session().await?;
     ensure_branch(&session, &req.branch_id)?;
-    db::create_student(&state.pool, req).await
+    db::create_student(&state.pool, req, &session.user_db_id).await
 }
 
 #[tauri::command]
@@ -210,8 +232,9 @@ async fn promote_students(
     req: PromoteRequest,
 ) -> Result<PromoteResponse, String> {
     let session = state.require_session().await?;
-    // The course's branch is validated inside db::promote_students; gate access here.
-    let course = db::list_courses(&state.pool, branch_filter(&session).as_deref())
+    // The course's branch is validated inside db::promote_students; gate access
+    // here. Archived courses included: their students remain promotable.
+    let course = db::list_courses(&state.pool, branch_filter(&session).as_deref(), true)
         .await?
         .into_iter()
         .find(|c| c.id == req.course_id)
@@ -260,7 +283,15 @@ async fn create_receipt(
         return Err("Cannot record a receipt for a cancelled admission".to_string());
     }
     ensure_branch(&session, &branch_id)?;
-    db::create_receipt(&state.pool, req, &branch_id).await
+    db::create_receipt(&state.pool, req, &branch_id, &session.user_db_id).await
+}
+
+/// Void a mistaken receipt (admin only — it reduces a student's recorded
+/// payments, so it stays an administrative correction).
+#[tauri::command]
+async fn cancel_receipt(state: tauri::State<'_, AppState>, id: String) -> Result<Receipt, String> {
+    let session = state.require_admin().await?;
+    db::cancel_receipt(&state.pool, &id, &session.user_db_id).await
 }
 
 #[tauri::command]
@@ -305,7 +336,26 @@ async fn update_user(
     req: UserRequest,
 ) -> Result<User, String> {
     state.require_admin().await?;
-    db::update_user(&state.pool, &id, req).await
+    let updated = db::update_user(&state.pool, &id, req).await?;
+    // Keep the in-memory session consistent when the admin edits their own
+    // account: a self-demotion or self-deactivation must take effect now, not
+    // at the next login.
+    let mut session = state.session.write().await;
+    if session
+        .as_ref()
+        .map(|s| s.user_db_id == updated.id)
+        .unwrap_or(false)
+    {
+        if updated.active {
+            if let Some(s) = session.as_mut() {
+                s.role = updated.role.clone();
+                s.branch_id = updated.branch_id.clone();
+            }
+        } else {
+            *session = None;
+        }
+    }
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -397,7 +447,9 @@ async fn restore_snapshot(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<(), String> {
-    state.require_session().await?;
+    // Restoring replaces every branch's data, so it is not branch-scoped work:
+    // only an admin may roll the whole database back.
+    state.require_admin().await?;
     let dir = backup::backups_dir(&state.data_dir);
     backup::restore_snapshot(&state.pool, &state.db_path, &dir, &path).await?;
     // Accounts may differ in the restored data; require a fresh login.
@@ -535,6 +587,8 @@ pub fn run() {
                 let pool = pool.clone();
                 let db_path = db_path.clone();
                 let dir = backup::backups_dir(&data_dir);
+                // A crash mid-restore can leave a *.db.restoring staging file.
+                backup::cleanup_staging(&dir);
                 if backup::needs_daily_snapshot(&dir) {
                     tauri::async_runtime::spawn(async move {
                         if let Err(e) = backup::create_snapshot(&pool, &db_path, &dir).await {
@@ -574,8 +628,10 @@ pub fn run() {
             list_courses,
             create_course,
             update_course,
+            archive_course,
+            unarchive_course,
+            delete_course,
             list_students,
-            get_student,
             create_student,
             update_student,
             cancel_student,
@@ -583,6 +639,7 @@ pub fn run() {
             next_form_no,
             list_receipts,
             create_receipt,
+            cancel_receipt,
             next_receipt_no,
             outstanding_report,
             list_users,
@@ -607,6 +664,7 @@ mod smoke_tests {
 
     const PRT: &str = "11111111-1111-1111-1111-111111111111";
     const HMT: &str = "22222222-2222-2222-2222-222222222222";
+    const ADMIN: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 
     fn student_req(branch: &str, course: &str, date: &str, fee: f64) -> StudentRequest {
         StudentRequest {
@@ -658,9 +716,9 @@ mod smoke_tests {
         let course = db::create_course(&pool, course_req(PRT, "BCA")).await?;
 
         // Numbering: per-branch, per-academic-year sequence with annual reset.
-        let s1 = db::create_student(&pool, student_req(PRT, &course.id, "2026-09-01", 1000.0)).await?;
-        let s2 = db::create_student(&pool, student_req(PRT, &course.id, "2026-09-05", 1000.0)).await?;
-        let s3 = db::create_student(&pool, student_req(PRT, &course.id, "2025-06-01", 1000.0)).await?;
+        let s1 = db::create_student(&pool, student_req(PRT, &course.id, "2026-09-01", 1000.0), ADMIN).await?;
+        let s2 = db::create_student(&pool, student_req(PRT, &course.id, "2026-09-05", 1000.0), ADMIN).await?;
+        let s3 = db::create_student(&pool, student_req(PRT, &course.id, "2025-06-01", 1000.0), ADMIN).await?;
         assert_eq!(s1.form_no, "PRT-11-1-2026", "first form no");
         assert_eq!(s2.form_no, "PRT-11-2-2026", "second form no increments");
         assert_eq!(s3.form_no, "PRT-11-1-2024", "resets in a different academic year");
@@ -676,6 +734,7 @@ mod smoke_tests {
                 reference_no: None,
             },
             PRT,
+            ADMIN,
         )
         .await?;
         assert_eq!(receipt.receipt_no, "PRT-12-1-2026", "receipt numbering");
@@ -693,9 +752,84 @@ mod smoke_tests {
                 reference_no: None,
             },
             PRT,
+            ADMIN,
         )
         .await;
         assert!(overpay.is_err(), "overpayment must be rejected");
+
+        // Cancelling a receipt frees the paid amount up again.
+        let cancelled = db::cancel_receipt(&pool, &receipt.id, ADMIN).await?;
+        assert!(cancelled.cancelled, "receipt marked cancelled");
+        let repay = db::create_receipt(
+            &pool,
+            ReceiptRequest {
+                student_id: s1.id.clone(),
+                receipt_date: "2026-09-04".into(),
+                fee_type: "Tuition".into(),
+                amount_paid: 500.0,
+                payment_mode: "Cash".into(),
+                reference_no: None,
+            },
+            PRT,
+            ADMIN,
+        )
+        .await?;
+        assert_eq!(repay.receipt_no, "PRT-12-2-2026", "replacement receipt gets the next number");
+
+        // Decimal amounts are rejected everywhere.
+        let decimal_fee =
+            db::create_student(&pool, student_req(PRT, &course.id, "2026-09-06", 1000.5), ADMIN)
+                .await;
+        assert!(decimal_fee.is_err(), "decimal fees must be rejected");
+        let decimal_pay = db::create_receipt(
+            &pool,
+            ReceiptRequest {
+                student_id: s2.id.clone(),
+                receipt_date: "2026-09-06".into(),
+                fee_type: "Tuition".into(),
+                amount_paid: 100.5,
+                payment_mode: "Cash".into(),
+                reference_no: None,
+            },
+            PRT,
+            ADMIN,
+        )
+        .await;
+        assert!(decimal_pay.is_err(), "decimal receipt amounts must be rejected");
+
+        // Malformed dates are rejected before they reach the numbering scheme.
+        let bad_date =
+            db::create_student(&pool, student_req(PRT, &course.id, "", 1000.0), ADMIN).await;
+        assert!(bad_date.is_err(), "empty admission date must be rejected");
+
+        // Course archive: hidden from active lists, students still loadable,
+        // delete blocked while students reference it.
+        db::set_course_active(&pool, &course.id, false).await?;
+        let active_courses = db::list_courses(&pool, Some(PRT), false).await?;
+        assert!(
+            !active_courses.iter().any(|c| c.id == course.id),
+            "archived course hidden from active list"
+        );
+        let all_courses = db::list_courses(&pool, Some(PRT), true).await?;
+        assert!(
+            all_courses.iter().any(|c| c.id == course.id && !c.active),
+            "archived course visible with include_archived"
+        );
+        assert!(
+            db::load_student(&pool, &s1.id).await.is_ok(),
+            "students of archived courses stay loadable"
+        );
+        assert!(
+            db::delete_course(&pool, &course.id).await.is_err(),
+            "deleting a course with students must fail"
+        );
+        db::set_course_active(&pool, &course.id, true).await?;
+        let empty_course = db::create_course(&pool, course_req(PRT, "Empty Course")).await?;
+        db::delete_course(&pool, &empty_course.id).await?;
+        assert!(
+            !db::list_courses(&pool, Some(PRT), true).await?.iter().any(|c| c.id == empty_course.id),
+            "hard-deleted course is gone"
+        );
 
         // Document numbers are frozen at creation: renaming the branch code
         // must not rewrite already-issued numbers.
@@ -703,7 +837,10 @@ mod smoke_tests {
         let s1_after = db::load_student(&pool, &s1.id).await?;
         assert_eq!(s1_after.form_no, "PRT-11-1-2026", "form no frozen after code rename");
         let receipts_after = db::list_receipts(&pool, None, Some(&s1.id)).await?;
-        assert_eq!(receipts_after[0].receipt_no, "PRT-12-1-2026", "receipt no frozen");
+        assert!(
+            receipts_after.iter().any(|r| r.receipt_no == "PRT-12-1-2026"),
+            "receipt no frozen"
+        );
         db::update_branch_code(&pool, PRT, "PRT").await?;
 
         // Branch moves are blocked on edit.
@@ -727,7 +864,7 @@ mod smoke_tests {
         let db_path = db::db_file(&tmp);
         let snap = backup::create_snapshot(&pool, &db_path, &backups).await?;
         let extra =
-            db::create_student(&pool, student_req(PRT, &course.id, "2026-09-09", 1000.0)).await?;
+            db::create_student(&pool, student_req(PRT, &course.id, "2026-09-09", 1000.0), ADMIN).await?;
         backup::restore_snapshot(&pool, &db_path, &backups, &snap.display().to_string()).await?;
         let after_restore = db::list_students(&pool, Some(PRT), true).await?;
         assert!(
@@ -752,7 +889,7 @@ mod smoke_tests {
         let pool2 = db::init_db(&tmp2).await?;
         let hmt_course = db::create_course(&pool2, course_req(HMT, "BBA")).await?;
         let hmt_student =
-            db::create_student(&pool2, student_req(HMT, &hmt_course.id, "2026-09-01", 500.0)).await?;
+            db::create_student(&pool2, student_req(HMT, &hmt_course.id, "2026-09-01", 500.0), ADMIN).await?;
 
         let summary = backup::import_backup(&pool2, &backup_file, None).await?;
         assert_eq!(summary.students, 3, "imported 3 PRT students");

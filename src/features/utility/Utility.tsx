@@ -1,5 +1,7 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import {
+  Archive,
+  ArchiveRestore,
   BookOpen,
   GraduationCap,
   ImageIcon,
@@ -10,11 +12,22 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  Trash2,
   UserRound,
   UserPlus,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -52,7 +65,14 @@ import {
 } from "@/components/ui/table";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, updateBranchCode } from "@/lib/api";
+import {
+  api,
+  archiveCourse,
+  deleteCourse,
+  listAllCourses,
+  unarchiveCourse,
+  updateBranchCode,
+} from "@/lib/api";
 import { fetchLetterheads, letterheadSrc } from "@/lib/letterhead";
 import type { Branch, Course, Me, User } from "@/types";
 
@@ -102,18 +122,23 @@ export function Utility({
   token,
   me,
   branches,
-  courses,
   refreshKey,
   onSaved,
 }: {
   token: string;
   me: Me;
   branches: Branch[];
-  courses: Course[];
   refreshKey: number;
   onSaved: () => void;
 }) {
   const [users, setUsers] = useState<User[]>([]);
+  // The global `courses` prop carries active courses only; the management tab
+  // also needs archived ones.
+  const [allCourses, setAllCourses] = useState<Course[]>([]);
+  const [deleteCourseTarget, setDeleteCourseTarget] = useState<Course | null>(
+    null,
+  );
+  const [courseActionBusy, setCourseActionBusy] = useState(false);
   const [courseDialogOpen, setCourseDialogOpen] = useState(false);
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
@@ -191,6 +216,19 @@ export function Utility({
   useEffect(() => {
     void fetchLetterheads().then(setLetterheads);
   }, []);
+
+  useEffect(() => {
+    async function loadAllCourses() {
+      if (me.role !== "admin") return;
+      try {
+        setAllCourses(await listAllCourses());
+      } catch {
+        setAllCourses([]);
+      }
+    }
+
+    void loadAllCourses();
+  }, [me.role, refreshKey]);
 
   if (me.role !== "admin") {
     return (
@@ -272,6 +310,7 @@ export function Utility({
       toast.success(editingCourseId ? "Course updated" : "Course saved");
       resetCourseForm();
       setCourseDialogOpen(false);
+      await refreshAllCourses();
       onSaved();
     } catch (error) {
       toast.error(
@@ -308,7 +347,60 @@ export function Utility({
     }
   }
 
+  async function refreshAllCourses() {
+    try {
+      setAllCourses(await listAllCourses());
+    } catch {
+      // Keep the stale list; the next global refresh will retry.
+    }
+  }
+
+  async function toggleCourseArchived(item: Course) {
+    setCourseActionBusy(true);
+    try {
+      if (item.active) {
+        await archiveCourse(item.id);
+        toast.success(`Archived ${item.name}`);
+      } else {
+        await unarchiveCourse(item.id);
+        toast.success(`Restored ${item.name}`);
+      }
+      await refreshAllCourses();
+      onSaved();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not update course",
+      );
+    } finally {
+      setCourseActionBusy(false);
+    }
+  }
+
+  async function confirmDeleteCourse() {
+    const target = deleteCourseTarget;
+    if (!target) return;
+    setCourseActionBusy(true);
+    try {
+      await deleteCourse(target.id);
+      toast.success(`Deleted ${target.name}`);
+      setDeleteCourseTarget(null);
+      await refreshAllCourses();
+      onSaved();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not delete course",
+      );
+    } finally {
+      setCourseActionBusy(false);
+    }
+  }
+
   async function saveSettings() {
+    const month = settings.academic_year_start_month;
+    if (!Number.isInteger(month) || month < 1 || month > 12) {
+      toast.error("Academic year start month must be between 1 and 12");
+      return;
+    }
     try {
       await api("/academic-settings", token, {
         method: "PATCH",
@@ -350,7 +442,7 @@ export function Utility({
             Add course
           </Button>
 
-          {courses.length === 0 ? (
+          {allCourses.length === 0 ? (
             <Card className="border-dashed pb-0">
               <CardContent className="flex flex-col items-center justify-center py-12 text-center">
                 <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-muted">
@@ -369,9 +461,9 @@ export function Utility({
           ) : (
             <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-3">
               {branches
-                .filter((b) => courses.some((c) => c.branch_id === b.id))
+                .filter((b) => allCourses.some((c) => c.branch_id === b.id))
                 .map((branch) => {
-                  const branchCourses = courses.filter(
+                  const branchCourses = allCourses.filter(
                     (c) => c.branch_id === branch.id,
                   );
                   return (
@@ -392,28 +484,81 @@ export function Utility({
                             <TableRow>
                               <TableHead>Course</TableHead>
                               <TableHead>Duration</TableHead>
-                              <TableHead className="w-[50px]" />
+                              <TableHead className="w-[110px]" />
                             </TableRow>
                           </TableHeader>
                           <TableBody>
                             {branchCourses.map((item) => (
-                              <TableRow key={item.id}>
+                              <TableRow
+                                key={item.id}
+                                className={!item.active ? "opacity-60" : undefined}
+                              >
                                 <TableCell className="font-medium">
-                                  {item.name}
+                                  <span className="flex items-center gap-1.5">
+                                    {item.name}
+                                    {!item.active && (
+                                      <Badge
+                                        variant="outline"
+                                        className="text-xs"
+                                      >
+                                        Archived
+                                      </Badge>
+                                    )}
+                                  </span>
                                 </TableCell>
                                 <TableCell className="text-muted-foreground">
                                   {item.duration} {item.duration_type}
                                   {item.duration !== 1 && "s"}
                                 </TableCell>
                                 <TableCell>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    onClick={() => editCourse(item)}
-                                  >
-                                    <Pencil className="size-3.5" />
-                                  </Button>
+                                  <div className="flex items-center justify-end gap-0.5">
+                                    {item.active && (
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon-sm"
+                                        title="Edit course"
+                                        onClick={() => editCourse(item)}
+                                      >
+                                        <Pencil className="size-3.5" />
+                                      </Button>
+                                    )}
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      disabled={courseActionBusy}
+                                      title={
+                                        item.active
+                                          ? "Archive course (hides it from pickers; students keep working)"
+                                          : "Restore course"
+                                      }
+                                      onClick={() =>
+                                        void toggleCourseArchived(item)
+                                      }
+                                    >
+                                      {item.active ? (
+                                        <Archive className="size-3.5" />
+                                      ) : (
+                                        <ArchiveRestore className="size-3.5" />
+                                      )}
+                                    </Button>
+                                    {!item.active && (
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon-sm"
+                                        className="text-destructive hover:text-destructive"
+                                        disabled={courseActionBusy}
+                                        title="Delete course permanently"
+                                        onClick={() =>
+                                          setDeleteCourseTarget(item)
+                                        }
+                                      >
+                                        <Trash2 className="size-3.5" />
+                                      </Button>
+                                    )}
+                                  </div>
                                 </TableCell>
                               </TableRow>
                             ))}
@@ -489,7 +634,7 @@ export function Utility({
                     onChange={(e) =>
                       setCourse({
                         ...course,
-                        duration: Number(e.currentTarget.value),
+                        duration: Math.floor(Number(e.currentTarget.value)),
                       })
                     }
                   />
@@ -610,6 +755,39 @@ export function Utility({
             </form>
           </DialogContent>
         </Dialog>
+
+        <AlertDialog
+          open={deleteCourseTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) setDeleteCourseTarget(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Course</AlertDialogTitle>
+              <AlertDialogDescription>
+                Permanently delete {deleteCourseTarget?.name}? This is only
+                possible while no student was ever admitted to the course, and
+                it cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={courseActionBusy}>
+                Back
+              </AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                disabled={courseActionBusy}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void confirmDeleteCourse();
+                }}
+              >
+                {courseActionBusy ? "Deleting..." : "Delete course"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </TabsContent>
 
       <TabsContent value="users" className="mt-4">

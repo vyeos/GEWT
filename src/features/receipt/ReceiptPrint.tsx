@@ -18,18 +18,16 @@ export function ReceiptPrint({
   branch,
   course,
   receipt,
-  academicYearStartMonth,
 }: {
   student: Student | undefined;
   branch: Branch | undefined;
   course: Course | undefined;
   receipt: PrintableReceipt | null;
-  academicYearStartMonth: number;
 }) {
   if (!student || !receipt)
     return createPortal(<div id="receipt-print" />, document.body);
 
-  const year = getCurrentCourseYear(student, academicYearStartMonth);
+  const year = getCurrentCourseYear(student);
 
   return createPortal(
     <div id="receipt-print">

@@ -1,27 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Me } from "@/types";
+import type { Course, Me } from "@/types";
 
-export class ApiRequestError extends Error {
-  status: number;
-
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = "ApiRequestError";
-    this.status = status;
-  }
-}
-
-function toApiError(error: unknown): ApiRequestError {
+function toApiError(error: unknown): Error {
   const message =
     typeof error === "string"
       ? error
       : error instanceof Error
         ? error.message
         : "Request failed";
-  // The backend returns "Not signed in" when there is no active session; map
-  // that to 401 so the app falls back to the login screen.
-  const status = /not signed in/i.test(message) ? 401 : 400;
-  return new ApiRequestError(message, status);
+  return new Error(message);
 }
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -56,6 +43,24 @@ export function previewReceiptNo(branchId: string, date: string): Promise<string
 
 export function updateBranchCode(id: string, code: string) {
   return call("update_branch", { id, code });
+}
+
+// Admin-only: the full course list including archived courses, for the
+// Utility management screen.
+export function listAllCourses(): Promise<Course[]> {
+  return call<Course[]>("list_courses", { includeArchived: true });
+}
+
+export function archiveCourse(id: string): Promise<Course> {
+  return call<Course>("archive_course", { id });
+}
+
+export function unarchiveCourse(id: string): Promise<Course> {
+  return call<Course>("unarchive_course", { id });
+}
+
+export function deleteCourse(id: string): Promise<void> {
+  return call<void>("delete_course", { id });
 }
 
 export type ImportSummary = {
@@ -120,13 +125,6 @@ export async function api<T>(
   const params = new URLSearchParams(query);
   const body = parseBody(init);
 
-  // /auth/me
-  if (rawPath === "/auth/me" && method === "GET") {
-    const me = await currentUser();
-    if (!me) throw new ApiRequestError("Not signed in", 401);
-    return me as T;
-  }
-
   if (rawPath === "/branches" && method === "GET") {
     return call<T>("list_branches");
   }
@@ -158,9 +156,6 @@ export async function api<T>(
     return call<T>("cancel_student", { id: cancelMatch[1] });
   }
   const studentMatch = rawPath.match(/^\/students\/(.+)$/);
-  if (studentMatch && method === "GET") {
-    return call<T>("get_student", { id: studentMatch[1] });
-  }
   if (studentMatch && method === "PATCH") {
     return call<T>("update_student", { id: studentMatch[1], req: body });
   }
@@ -171,6 +166,10 @@ export async function api<T>(
   }
   if (rawPath === "/receipts" && method === "POST") {
     return call<T>("create_receipt", { req: body });
+  }
+  const receiptCancelMatch = rawPath.match(/^\/receipts\/(.+)\/cancel$/);
+  if (receiptCancelMatch && method === "POST") {
+    return call<T>("cancel_receipt", { id: receiptCancelMatch[1] });
   }
 
   if (rawPath === "/reports/outstanding" && method === "GET") {
@@ -192,5 +191,5 @@ export async function api<T>(
     return call<T>("update_settings", { req: body });
   }
 
-  throw new ApiRequestError(`Unsupported request: ${method} ${rawPath}`, 400);
+  throw new Error(`Unsupported request: ${method} ${rawPath}`);
 }

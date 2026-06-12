@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Ban,
   Check,
   ChevronsUpDown,
   ImageIcon,
@@ -8,6 +9,17 @@ import {
   ReceiptText,
 } from "lucide-react";
 import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -36,14 +48,6 @@ import {
 import { paymentModes } from "@/data/seeds";
 import { api, previewReceiptNo } from "@/lib/api";
 import {
-  cacheReceipt,
-  getCachedReceipts,
-  getCachedStudents,
-  syncReceipts,
-  syncScope,
-  syncStudents,
-} from "@/lib/cache";
-import {
   formatCoursePeriod,
   formatCourseYear,
   getCourseBillingPeriods,
@@ -66,6 +70,7 @@ type StudentReceipt = {
   payment_mode: PaymentMode;
   amount_paid: number;
   reference_no: string | null;
+  cancelled?: boolean;
 };
 
 const feeTypes = ["Tuition", "Other"] as const;
@@ -103,10 +108,9 @@ export function Receipt({
     null,
   );
   const printAfterRenderRef = useRef(false);
+  const [cancelTarget, setCancelTarget] = useState<StudentReceipt | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
   const requiresRef = mode !== "Cash";
-  const branchScopeId =
-    me.role === "admin" ? undefined : (me.branch_id ?? undefined);
-  const cacheScope = syncScope(me);
   const allowedBranches =
     me.role === "admin"
       ? branches
@@ -120,7 +124,7 @@ export function Receipt({
     .filter((group) => group.branchCourses.length > 0);
   const selectedStudent = students.find((student) => student.id === studentId);
   const selectedStudentCurrentYear = selectedStudent
-    ? getCurrentCourseYear(selectedStudent, me.academic_year_start_month)
+    ? getCurrentCourseYear(selectedStudent)
     : null;
   const selectedStudentCurrentPeriod = selectedStudent
     ? getCurrentCoursePeriod(selectedStudent)
@@ -138,18 +142,17 @@ export function Receipt({
     const years = new Set<number>();
     for (const student of students) {
       if (courseId && student.course_id !== courseId) continue;
-      years.add(getCurrentCourseYear(student, me.academic_year_start_month));
+      years.add(getCurrentCourseYear(student));
     }
     return [...years].sort((a, b) => a - b);
-  }, [students, courseId, me.academic_year_start_month]);
+  }, [students, courseId]);
   const visibleStudents = useMemo(() => {
     const query = studentSearch.trim().toLowerCase();
     return students.filter((student) => {
       if (courseId && student.course_id !== courseId) return false;
       if (
         yearFilter !== "all" &&
-        getCurrentCourseYear(student, me.academic_year_start_month) !==
-          Number(yearFilter)
+        getCurrentCourseYear(student) !== Number(yearFilter)
       )
         return false;
       if (!query) return true;
@@ -157,13 +160,7 @@ export function Receipt({
         .toLowerCase()
         .includes(query);
     });
-  }, [
-    courseId,
-    studentSearch,
-    students,
-    yearFilter,
-    me.academic_year_start_month,
-  ]);
+  }, [courseId, studentSearch, students, yearFilter]);
 
   async function loadNextReceiptNo() {
     if (!selectedStudent) {
@@ -181,37 +178,17 @@ export function Receipt({
 
   useEffect(() => {
     async function loadStudents() {
-      let showedCachedData = false;
       try {
-        const cachedStudents = await getCachedStudents(branchScopeId);
-        if (cachedStudents.length > 0) {
-          setStudents(cachedStudents);
-          showedCachedData = true;
-        }
-      } catch {
-        // The cache is only available in Tauri. Browser dev falls back below.
-      }
-
-      try {
-        await syncStudents(token, cacheScope);
-        setStudents(await getCachedStudents(branchScopeId));
+        setStudents(await api<Student[]>("/students", token));
       } catch (error) {
-        try {
-          setStudents(await api<Student[]>("/students", token));
-        } catch {
-          if (!showedCachedData) {
-            toast.error(
-              error instanceof Error
-                ? error.message
-                : "Unable to load students",
-            );
-          }
-        }
+        toast.error(
+          error instanceof Error ? error.message : "Unable to load students",
+        );
       }
     }
 
     void loadStudents();
-  }, [branchScopeId, cacheScope, token, refreshKey]);
+  }, [token, refreshKey]);
 
   // The receipt number is system-generated as {branch}-{type}-{seq}-{year},
   // scoped to the selected student's branch and the receipt date's academic year.
@@ -232,46 +209,32 @@ export function Receipt({
     }
   }, [availableYears, yearFilter]);
 
+  const fetchStudentReceipts = useCallback(
+    (id: string) =>
+      api<StudentReceipt[]>(
+        `/receipts?student_id=${encodeURIComponent(id)}`,
+        token,
+      ),
+    [token],
+  );
+
   useEffect(() => {
     if (!studentId) {
       setStudentReceipts([]);
       return;
     }
-    async function loadStudentReceipts() {
-      let showedCachedData = false;
-      try {
-        const cachedReceipts = await getCachedReceipts(
-          studentId,
-          branchScopeId,
-        );
-        setStudentReceipts(cachedReceipts as StudentReceipt[]);
-        showedCachedData = cachedReceipts.length > 0;
-      } catch {
-        // The cache is only available in Tauri. Browser dev falls back below.
-      }
-
-      try {
-        await syncReceipts(token, cacheScope);
-        setStudentReceipts(
-          (await getCachedReceipts(
-            studentId,
-            branchScopeId,
-          )) as StudentReceipt[],
-        );
-      } catch {
-        try {
-          const data = await api<StudentReceipt[]>(
-            `/receipts?student_id=${encodeURIComponent(studentId)}`,
-            token,
-          );
-          setStudentReceipts(data);
-        } catch {
-          if (!showedCachedData) setStudentReceipts([]);
-        }
-      }
-    }
-    void loadStudentReceipts();
-  }, [branchScopeId, cacheScope, studentId, token, refreshKey]);
+    let stale = false;
+    fetchStudentReceipts(studentId)
+      .then((data) => {
+        if (!stale) setStudentReceipts(data);
+      })
+      .catch(() => {
+        if (!stale) setStudentReceipts([]);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [fetchStudentReceipts, studentId, refreshKey]);
 
   const feeStatusRows = useMemo(() => {
     if (!selectedStudent) return [];
@@ -299,6 +262,7 @@ export function Receipt({
 
     const paidByType = new Map<string, number>();
     for (const r of studentReceipts) {
+      if (r.cancelled) continue;
       const key = r.fee_type || "Tuition";
       paidByType.set(key, (paidByType.get(key) ?? 0) + r.amount_paid);
     }
@@ -382,8 +346,10 @@ export function Receipt({
   }
 
   function updateAmount(value: string) {
-    const nextAmount = Number(value);
-    if (!Number.isFinite(nextAmount)) {
+    // Whole rupees only — decimals would create pending balances that can
+    // never be cleared.
+    const nextAmount = Math.floor(Number(value));
+    if (!Number.isFinite(nextAmount) || nextAmount < 0) {
       setAmount(0);
       return;
     }
@@ -392,14 +358,41 @@ export function Receipt({
     );
   }
 
+  async function confirmCancelReceipt() {
+    const target = cancelTarget;
+    if (!target?.id || !studentId) return;
+    setIsCancelling(true);
+    try {
+      await api(`/receipts/${target.id}/cancel`, token, { method: "POST" });
+      setStudentReceipts(await fetchStudentReceipts(studentId));
+      toast.success(`Cancelled receipt #${target.receipt_no}`);
+      setCancelTarget(null);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Unable to cancel receipt",
+      );
+    } finally {
+      setIsCancelling(false);
+    }
+  }
+
   async function submit(event: React.SubmitEvent) {
     event.preventDefault();
+    const trimmedReference = reference.trim();
     if (!studentId) {
       toast.error("Select a student");
       return;
     }
-    if (requiresRef && !reference) {
+    if (!receiptDate) {
+      toast.error("Select a receipt date");
+      return;
+    }
+    if (requiresRef && !trimmedReference) {
       toast.error("Remarks are required for non-cash payments");
+      return;
+    }
+    if (!Number.isInteger(amount) || amount <= 0) {
+      toast.error("Amount paid must be a whole rupee amount");
       return;
     }
     if (amountMax !== undefined && amountMax <= 0) {
@@ -418,7 +411,8 @@ export function Receipt({
       fee_type: feeType,
       amount_paid: amount,
       payment_mode: mode,
-      reference_no: reference,
+      reference_no: trimmedReference,
+      cancelled: false,
     };
     setIsSaving(true);
     setStudentReceipts((current) => [optimisticReceipt, ...current]);
@@ -427,16 +421,14 @@ export function Receipt({
       const savedReceipt = await api<StudentReceipt>("/receipts", token, {
         method: "POST",
         body: JSON.stringify({
-          receipt_no: receiptNo,
           student_id: studentId,
           receipt_date: receiptDate,
           fee_type: feeType,
           amount_paid: amount,
           payment_mode: mode,
-          reference_no: reference,
+          reference_no: trimmedReference,
         }),
       });
-      cacheReceipt(savedReceipt).catch(() => {});
       setStudentReceipts((current) =>
         current.map((receipt) =>
           receipt.optimistic_id === optimisticId ? savedReceipt : receipt,
@@ -477,6 +469,9 @@ export function Receipt({
                 <Label>Receipt date</Label>
                 <Input
                   type="date"
+                  required
+                  min="1900-01-01"
+                  max="2100-12-31"
                   value={receiptDate}
                   onChange={(e) => setReceiptDate(e.currentTarget.value)}
                 />
@@ -873,45 +868,78 @@ export function Receipt({
                       <TableHead className="w-[16%]">Date</TableHead>
                       <TableHead className="w-[13%]">Fee Type</TableHead>
                       <TableHead className="w-[12%]">Mode</TableHead>
-                      <TableHead className="w-[16%] text-right">
+                      <TableHead className="w-[14%] text-right">
                         Amount
                       </TableHead>
-                      <TableHead className="w-[19%]">Remarks</TableHead>
-                      <TableHead className="w-[10%] text-right">Print</TableHead>
+                      <TableHead className="w-[17%]">Remarks</TableHead>
+                      <TableHead className="w-[14%] text-right">
+                        Actions
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {studentReceipts.map((r) => (
-                      <TableRow key={r.id ?? r.optimistic_id ?? r.receipt_no}>
-                        <TableCell>{r.receipt_no}</TableCell>
+                      <TableRow
+                        key={r.id ?? r.optimistic_id ?? r.receipt_no}
+                        className={cn(r.cancelled && "opacity-60")}
+                      >
+                        <TableCell
+                          className={cn(r.cancelled && "line-through")}
+                        >
+                          {r.receipt_no}
+                        </TableCell>
                         <TableCell>{r.receipt_date}</TableCell>
                         <TableCell>{r.fee_type || "Tuition"}</TableCell>
                         <TableCell>{r.payment_mode}</TableCell>
-                        <TableCell className="text-right">
+                        <TableCell
+                          className={cn(
+                            "text-right",
+                            r.cancelled && "line-through",
+                          )}
+                        >
                           {money(r.amount_paid)}
                         </TableCell>
                         <TableCell>{r.reference_no || "—"}</TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="size-7"
-                            title="Print receipt"
-                            aria-label={`Print receipt ${r.receipt_no}`}
-                            onClick={() =>
-                              handlePrint({
-                                receipt_no: r.receipt_no,
-                                receipt_date: r.receipt_date,
-                                fee_type: r.fee_type,
-                                payment_mode: r.payment_mode,
-                                amount_paid: r.amount_paid,
-                                reference_no: r.reference_no,
-                              })
-                            }
-                          >
-                            <Printer className="size-4" />
-                          </Button>
+                          {r.cancelled ? (
+                            <Badge variant="destructive">Cancelled</Badge>
+                          ) : (
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="size-7"
+                                title="Print receipt"
+                                aria-label={`Print receipt ${r.receipt_no}`}
+                                onClick={() =>
+                                  handlePrint({
+                                    receipt_no: r.receipt_no,
+                                    receipt_date: r.receipt_date,
+                                    fee_type: r.fee_type,
+                                    payment_mode: r.payment_mode,
+                                    amount_paid: r.amount_paid,
+                                    reference_no: r.reference_no,
+                                  })
+                                }
+                              >
+                                <Printer className="size-4" />
+                              </Button>
+                              {me.role === "admin" && r.id && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="size-7 text-destructive hover:text-destructive"
+                                  title="Cancel receipt"
+                                  aria-label={`Cancel receipt ${r.receipt_no}`}
+                                  onClick={() => setCancelTarget(r)}
+                                >
+                                  <Ban className="size-4" />
+                                </Button>
+                              )}
+                            </div>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -969,12 +997,43 @@ export function Receipt({
         </div>
       )}
 
+      <AlertDialog
+        open={cancelTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setCancelTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel Receipt</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cancel receipt #{cancelTarget?.receipt_no} of{" "}
+              {money(cancelTarget?.amount_paid ?? 0)}? The receipt keeps its
+              number but stops counting towards the student's paid fees, so a
+              corrected receipt can be recorded. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isCancelling}>Back</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={isCancelling}
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmCancelReceipt();
+              }}
+            >
+              {isCancelling ? "Cancelling..." : "Cancel receipt"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <ReceiptPrint
         student={selectedStudent}
         branch={selectedBranch}
         course={selectedStudentCourse}
         receipt={printReceipt}
-        academicYearStartMonth={me.academic_year_start_month}
       />
     </div>
   );

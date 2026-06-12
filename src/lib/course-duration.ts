@@ -46,13 +46,7 @@ export function getCourseDuration(source: CourseDurationSource) {
 
 export function getCurrentCoursePeriod(student: Student) {
   const { totalSemesters } = getCourseDuration(student);
-  const period =
-    student.current_course_period ??
-    (student.current_course_year
-      ? (student.current_course_year - 1) * 2 + 1
-      : undefined);
-
-  return Math.min(Math.max(period ?? 1, 1), totalSemesters);
+  return Math.min(Math.max(student.current_course_period, 1), totalSemesters);
 }
 
 export function getCourseBillingPeriods(
@@ -71,12 +65,6 @@ export function getCourseBillingPeriods(
   });
 }
 
-function academicYearFor(date: Date, academicStartMonth: number) {
-  return date.getMonth() + 1 >= academicStartMonth
-    ? date.getFullYear()
-    : date.getFullYear() - 1;
-}
-
 function ordinal(value: number) {
   const remainder = value % 100;
   if (remainder >= 11 && remainder <= 13) return `${value}th`;
@@ -93,32 +81,14 @@ function ordinal(value: number) {
   }
 }
 
-export function getCurrentCourseYear(
-  student: Student,
-  academicStartMonth: number,
-  now = new Date(),
-) {
-  if (student.current_course_period) {
-    const { totalYears } = getCourseDuration(student);
-    return Math.min(
-      Math.max(Math.ceil(getCurrentCoursePeriod(student) / 2), 1),
-      totalYears,
-    );
-  }
-
-  if (student.current_course_year) {
-    const { totalYears } = getCourseDuration(student);
-    return Math.min(Math.max(student.current_course_year, 1), totalYears);
-  }
-
-  const admission = new Date(student.admission_date);
-  const currentYear =
-    academicYearFor(now, academicStartMonth) -
-    academicYearFor(admission, academicStartMonth) +
-    1;
+// The course year is always derived from the billing period the office has
+// promoted the student to (the backend guarantees current_course_period).
+export function getCurrentCourseYear(student: Student) {
   const { totalYears } = getCourseDuration(student);
-
-  return Math.min(Math.max(currentYear, 1), totalYears);
+  return Math.min(
+    Math.max(Math.ceil(getCurrentCoursePeriod(student) / 2), 1),
+    totalYears,
+  );
 }
 
 export function formatCourseYear(year: number) {

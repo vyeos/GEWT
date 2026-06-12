@@ -13,6 +13,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 use sqlx::FromRow;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub type BackupResult<T> = Result<T, String>;
@@ -112,6 +113,14 @@ struct RawReceipt {
     amount_paid: f64,
     payment_mode: String,
     reference_no: Option<String>,
+    // Receipt cancellation was introduced after the first release; older
+    // backup files won't carry these fields.
+    #[serde(default)]
+    cancelled: i64,
+    #[serde(default)]
+    cancelled_at: Option<String>,
+    #[serde(default)]
+    cancelled_by: Option<String>,
     created_by: Option<String>,
     created_at: String,
     updated_at: String,
@@ -200,11 +209,20 @@ pub async fn export_backup(
     }
     let branches = branch_q.fetch_all(pool).await.map_err(|e| e.to_string())?;
 
-    // Accounts: all admins + employees of the included branches.
-    let acct_sql = format!(
-        "SELECT id, user_id, name, password_hash, role, branch_id, active, updated_at
-         FROM users WHERE role = 'admin' OR branch_id IN ({in_clause})"
-    );
+    // Accounts: admin exports carry all admins + employees of the included
+    // branches. Employee exports carry only those employees — handing a branch
+    // user a file full of admin password hashes would invite offline cracking.
+    let acct_sql = if origin_role == "admin" {
+        format!(
+            "SELECT id, user_id, name, password_hash, role, branch_id, active, updated_at
+             FROM users WHERE role = 'admin' OR branch_id IN ({in_clause})"
+        )
+    } else {
+        format!(
+            "SELECT id, user_id, name, password_hash, role, branch_id, active, updated_at
+             FROM users WHERE role = 'employee' AND branch_id IN ({in_clause})"
+        )
+    };
     let mut acct_q = sqlx::query_as::<_, RawUser>(&acct_sql);
     for id in branch_ids {
         acct_q = acct_q.bind(id);
@@ -266,7 +284,7 @@ async fn fetch_students(pool: &SqlitePool, ids: &[String], in_clause: &str) -> B
 
 async fn fetch_receipts(pool: &SqlitePool, ids: &[String], in_clause: &str) -> BackupResult<Vec<RawReceipt>> {
     let sql = format!(
-        "SELECT id, receipt_seq, receipt_year, receipt_no, receipt_date, student_id, branch_id, fee_type, amount_paid, payment_mode, reference_no, created_by, created_at, updated_at
+        "SELECT id, receipt_seq, receipt_year, receipt_no, receipt_date, student_id, branch_id, fee_type, amount_paid, payment_mode, reference_no, cancelled, cancelled_at, cancelled_by, created_by, created_at, updated_at
          FROM receipts WHERE branch_id IN ({in_clause})"
     );
     let mut q = sqlx::query_as::<_, RawReceipt>(&sql);
@@ -446,11 +464,13 @@ pub async fn import_backup(
 
     for r in &backup.data.receipts {
         sqlx::query(
-            "INSERT INTO receipts (id, receipt_seq, receipt_year, receipt_no, receipt_date, student_id, branch_id, fee_type, amount_paid, payment_mode, reference_no, created_by, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO receipts (id, receipt_seq, receipt_year, receipt_no, receipt_date, student_id, branch_id, fee_type, amount_paid, payment_mode, reference_no, cancelled, cancelled_at, cancelled_by, created_by, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&r.id).bind(r.receipt_seq).bind(r.receipt_year).bind(&r.receipt_no).bind(&r.receipt_date).bind(&r.student_id).bind(&r.branch_id)
-        .bind(&r.fee_type).bind(r.amount_paid).bind(&r.payment_mode).bind(&r.reference_no).bind(&r.created_by).bind(&r.created_at).bind(&r.updated_at)
+        .bind(&r.fee_type).bind(r.amount_paid).bind(&r.payment_mode).bind(&r.reference_no)
+        .bind(r.cancelled).bind(&r.cancelled_at).bind(&r.cancelled_by)
+        .bind(&r.created_by).bind(&r.created_at).bind(&r.updated_at)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
@@ -487,14 +507,38 @@ pub async fn import_backup(
 // Local safety snapshots (raw DB copies in app_data_dir/backups)
 // ---------------------------------------------------------------------------
 
-const MAX_SNAPSHOTS: usize = 10;
+/// Always keep this many of the newest snapshots, whatever day they're from —
+/// so a manual "snapshot before a risky change" survives a few app restarts.
+const KEEP_RECENT_SNAPSHOTS: usize = 5;
+/// Additionally keep the newest snapshot of each of this many distinct days,
+/// so closing the app many times in one day can't wipe older restore points.
+const KEEP_SNAPSHOT_DAYS: usize = 10;
 
 pub fn backups_dir(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("backups")
 }
 
+/// Remove stale `*.db.restoring` staging files left behind if the app crashed
+/// in the middle of a snapshot restore.
+pub fn cleanup_staging(dir: &Path) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        let is_staging = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.ends_with(".db.restoring"))
+            .unwrap_or(false);
+        if is_staging {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 /// Checkpoint the WAL and copy the live DB file into the backups folder,
-/// pruning to the most recent MAX_SNAPSHOTS.
+/// then prune old snapshots (see prune_snapshots for the retention rules).
 pub async fn create_snapshot(pool: &SqlitePool, db_path: &Path, dir: &Path) -> BackupResult<PathBuf> {
     sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
         .execute(pool)
@@ -508,23 +552,45 @@ pub async fn create_snapshot(pool: &SqlitePool, db_path: &Path, dir: &Path) -> B
     Ok(dest)
 }
 
+/// Retention: the KEEP_RECENT_SNAPSHOTS newest files, plus the newest snapshot
+/// of each of the KEEP_SNAPSHOT_DAYS most recent days that have one. A snapshot
+/// is taken on every app close, so a simple "keep newest N" would let one busy
+/// day push every older day's restore point out of the window.
 fn prune_snapshots(dir: &Path) {
     let Ok(read) = std::fs::read_dir(dir) else {
         return;
     };
+    // Filenames are gewt-YYYYMMDD-HHMMSS.db, so a lexical sort is also a
+    // chronological sort. Newest first.
     let mut snaps: Vec<PathBuf> = read
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.starts_with("gewt-") && n.ends_with(".db"))
-                .unwrap_or(false)
-        })
+        .filter(|p| is_snapshot_file(p))
         .collect();
     snaps.sort();
-    if snaps.len() > MAX_SNAPSHOTS {
-        for old in &snaps[..snaps.len() - MAX_SNAPSHOTS] {
-            let _ = std::fs::remove_file(old);
+    snaps.reverse();
+
+    let mut keep: std::collections::HashSet<PathBuf> = HashSet::new();
+    let mut days_kept: Vec<String> = Vec::new();
+    for (index, snap) in snaps.iter().enumerate() {
+        if index < KEEP_RECENT_SNAPSHOTS {
+            keep.insert(snap.clone());
+        }
+        // "gewt-YYYYMMDD" — the day prefix of the snapshot file name.
+        let day = snap
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.chars().take(13).collect::<String>())
+            .unwrap_or_default();
+        if !days_kept.contains(&day) {
+            if days_kept.len() < KEEP_SNAPSHOT_DAYS {
+                days_kept.push(day);
+                keep.insert(snap.clone());
+            }
+        }
+    }
+    for snap in &snaps {
+        if !keep.contains(snap) {
+            let _ = std::fs::remove_file(snap);
         }
     }
 }
@@ -593,7 +659,7 @@ pub fn list_snapshots(dir: &Path) -> Vec<SnapshotEntry> {
     entries
 }
 
-const RESTORE_TABLES: [&str; 8] = [
+const RESTORE_TABLES: [&str; 7] = [
     "receipts",
     "students",
     "courses",
@@ -601,7 +667,6 @@ const RESTORE_TABLES: [&str; 8] = [
     "number_sequences",
     "academic_settings",
     "branches",
-    "roles",
 ];
 
 /// Replace the live database content with a snapshot's. The copy happens

@@ -119,7 +119,7 @@ function toForm(student: Student): StudentForm {
     admission_date: student.admission_date,
     branch_id: student.branch_id,
     course_id: student.course_id,
-    current_course_period: student.current_course_period ?? 1,
+    current_course_period: student.current_course_period,
     surname,
     student_name: name,
     father_name: father,
@@ -157,7 +157,8 @@ function feeField(type: "fee" | "tuition" | "other", year: number) {
 }
 
 function numberValue(value: string) {
-  const parsed = Number(value);
+  // Fees are whole rupees only.
+  const parsed = Math.floor(Number(value));
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
 }
 
@@ -230,21 +231,12 @@ export function Students({
     if (!canShowTable) return [];
     return students.filter((student) => {
       if (student.course_id !== courseId) return false;
-      if (
-        getCurrentCourseYear(student, me.academic_year_start_month) !==
-        Number(currentYearValue)
-      ) {
+      if (getCurrentCourseYear(student) !== Number(currentYearValue)) {
         return false;
       }
       return true;
     });
-  }, [
-    canShowTable,
-    courseId,
-    currentYearValue,
-    me.academic_year_start_month,
-    students,
-  ]);
+  }, [canShowTable, courseId, currentYearValue, students]);
   const visibleStudents = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return tableStudents;
@@ -288,13 +280,20 @@ export function Students({
     setCurrentYearValue("");
   }, [currentYearValue, currentYears]);
 
+  // When the student list reloads (global refresh), pick up the latest record
+  // for the open editor — but never clobber edits in progress: the form is
+  // only re-seeded if it still matches the record it was loaded from.
   useEffect(() => {
     if (!selectedStudent) return;
     const latest = students.find((student) => student.id === selectedStudent.id);
-    if (!latest) return;
+    if (!latest || latest === selectedStudent) return;
+    const pristine =
+      form !== null &&
+      JSON.stringify(form) === JSON.stringify(toForm(selectedStudent));
     setSelectedStudent(latest);
-    setForm(toForm(latest));
-  }, [selectedStudent?.id, students]);
+    if (pristine) setForm(toForm(latest));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [students]);
 
   function openStudent(student: Student) {
     setSelectedStudent(student);
@@ -513,6 +512,9 @@ export function Students({
                 <Label>Admission date</Label>
                 <Input
                   type="date"
+                  required
+                  min="1900-01-01"
+                  max="2100-12-31"
                   value={form.admission_date}
                   onChange={(e) =>
                     updateForm("admission_date", e.currentTarget.value)
@@ -774,7 +776,7 @@ export function Students({
                           <Input
                             type="number"
                             min="0"
-                            step="0.01"
+                            step="1"
                             disabled={isCancelled}
                             value={Number(form[feeField(type, year)])}
                             onChange={(e) =>
@@ -971,10 +973,7 @@ export function Students({
                       <Badge variant="secondary">{student.course_name}</Badge>
                     </TableCell>
                     <TableCell>
-                      {formatCoursePeriod(
-                        student,
-                        student.current_course_period ?? 1,
-                      )}
+                      {formatCoursePeriod(student, student.current_course_period)}
                     </TableCell>
                     <TableCell>{admissionYear(student)}</TableCell>
                     <TableCell>

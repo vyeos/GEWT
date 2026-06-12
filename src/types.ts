@@ -20,6 +20,7 @@ export type Course = {
   duration: number;
   duration_type: "year" | "semester";
   letterhead: string | null;
+  active: boolean;
 };
 
 export type User = {
@@ -48,8 +49,7 @@ export type Student = {
   course_name: string;
   course_duration: number;
   course_duration_type: "year" | "semester";
-  current_course_year?: number;
-  current_course_period?: number;
+  current_course_period: number;
   student_name: string;
   surname: string;
   father_name: string;
@@ -90,6 +90,20 @@ export type OutstandingYearBreakdown = {
   total_due: number;
   total_paid: number;
   pending: number;
+};
+
+export type Receipt = {
+  id: string;
+  receipt_no: string;
+  receipt_date: string;
+  student_id: string;
+  branch_id: string;
+  fee_type: string;
+  amount_paid: number;
+  payment_mode: PaymentMode;
+  reference_no: string | null;
+  cancelled: boolean;
+  cancelled_at: string | null;
 };
 
 export type OutstandingRow = Student & {

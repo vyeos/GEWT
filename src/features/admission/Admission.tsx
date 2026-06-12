@@ -27,7 +27,6 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { api, previewFormNo } from "@/lib/api";
-import { cacheStudent } from "@/lib/cache";
 import { getCourseDuration } from "@/lib/course-duration";
 import { money, today } from "@/lib/format";
 import { letterheadSrc } from "@/lib/letterhead";
@@ -173,7 +172,15 @@ export function Admission({
         father_name,
         ...studentForm
       } = form;
-      if (Math.abs(tuition_fee + other_fee - yearly_fee) > 0.01) {
+      if (!form.course_id) {
+        toast.error("Select a course");
+        return;
+      }
+      if (!form.admission_date) {
+        toast.error("Select an admission date");
+        return;
+      }
+      if (tuition_fee + other_fee !== yearly_fee) {
         toast.error("Tuition fee and other fee must add up to yearly fee");
         return;
       }
@@ -208,7 +215,6 @@ export function Admission({
           other_fee_year_4: feeForYear(4, other_fee),
         }),
       });
-      cacheStudent(savedStudent).catch(() => {});
       toast.success(`Admitted Student #${savedStudent.form_no}`);
       if (print) {
         setPrintCourse(selectedCourse);
@@ -248,7 +254,8 @@ export function Admission({
   }
 
   function updateYearlyFee(value: string) {
-    const parsed = Number(value);
+    // Fees are whole rupees only.
+    const parsed = Math.floor(Number(value));
     const yearly_fee = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
     setForm((current) => ({
       ...current,
@@ -262,7 +269,7 @@ export function Admission({
   }
 
   function updateSplitFee(field: "tuition_fee" | "other_fee", value: string) {
-    const parsed = Number(value);
+    const parsed = Math.floor(Number(value));
     const amount = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
     setForm((current) => ({
       ...current,
@@ -296,6 +303,9 @@ export function Admission({
               <Label>Admission date</Label>
               <Input
                 type="date"
+                required
+                min="1900-01-01"
+                max="2100-12-31"
                 value={form.admission_date}
                 onChange={(e) =>
                   setForm({ ...form, admission_date: e.currentTarget.value })
@@ -452,7 +462,7 @@ export function Admission({
               <Input
                 type="number"
                 min="0"
-                step="0.01"
+                step="1"
                 value={form.yearly_fee}
                 onChange={(e) => updateYearlyFee(e.currentTarget.value)}
               />
@@ -462,7 +472,7 @@ export function Admission({
               <Input
                 type="number"
                 min="0"
-                step="0.01"
+                step="1"
                 max={tuitionFeeMax}
                 value={form.tuition_fee}
                 disabled={tuitionFeeMax === 0}
@@ -481,7 +491,7 @@ export function Admission({
               <Input
                 type="number"
                 min="0"
-                step="0.01"
+                step="1"
                 max={otherFeeMax}
                 value={form.other_fee}
                 disabled={otherFeeMax === 0}

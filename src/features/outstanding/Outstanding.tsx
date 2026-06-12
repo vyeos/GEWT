@@ -32,7 +32,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
-import { formatCourseYear, getCourseDuration } from "@/lib/course-duration";
+import {
+  formatCourseYear,
+  getCourseDuration,
+  getCurrentCourseYear,
+} from "@/lib/course-duration";
 import { money } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type {
@@ -67,20 +71,6 @@ function yearBreakdown(row: OutstandingRow, year: number) {
   return (
     row.year_breakdown.find((breakdown) => breakdown.year === year) ??
     emptyYearBreakdown(year)
-  );
-}
-
-function currentCourseYear(row: OutstandingRow) {
-  if (row.current_course_period) {
-    return Math.min(
-      Math.max(Math.ceil(row.current_course_period / 2), 1),
-      getCourseDuration(row).totalYears,
-    );
-  }
-
-  return Math.min(
-    Math.max(row.current_course_year ?? 1, 1),
-    getCourseDuration(row).totalYears,
   );
 }
 
@@ -371,7 +361,7 @@ export function Outstanding({
                 </TableHeader>
                 <TableBody>
                   {visibleRows.map((row) => {
-                    const studentCurrentYear = currentCourseYear(row);
+                    const studentCurrentYear = getCurrentCourseYear(row);
                     return (
                       <TableRow key={row.id}>
                         <TableCell>{row.form_no}</TableCell>
