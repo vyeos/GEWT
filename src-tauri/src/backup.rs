@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
-use sqlx::FromRow;
+use sqlx::Row;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -20,7 +20,7 @@ pub type BackupResult<T> = Result<T, String>;
 
 const SCHEMA_VERSION: i64 = 1;
 
-#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct RawBranch {
     id: String,
     code: String,
@@ -28,7 +28,7 @@ struct RawBranch {
     updated_at: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct RawUser {
     id: String,
     user_id: String,
@@ -40,7 +40,7 @@ struct RawUser {
     updated_at: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct RawCourse {
     id: String,
     branch_id: String,
@@ -52,7 +52,7 @@ struct RawCourse {
     updated_at: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct RawStudent {
     id: String,
     form_seq: i64,
@@ -99,7 +99,7 @@ struct RawStudent {
     updated_at: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct RawReceipt {
     id: String,
     receipt_seq: i64,
@@ -126,7 +126,7 @@ struct RawReceipt {
     updated_at: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct RawSequence {
     branch_id: String,
     doc_type: String,
@@ -134,13 +134,94 @@ struct RawSequence {
     last_value: i64,
 }
 
-#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct RawSettings {
     academic_year_start_month: i64,
     form_type_code: String,
     receipt_type_code: String,
     updated_at: String,
 }
+
+macro_rules! impl_from_row {
+    ($ty:ty { $($field:ident),+ $(,)? }) => {
+        impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for $ty {
+            fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+                Ok(Self {
+                    $($field: row.try_get(stringify!($field))?,)+
+                })
+            }
+        }
+    };
+}
+
+impl_from_row!(RawBranch { id, code, name, updated_at });
+impl_from_row!(RawUser { id, user_id, name, password_hash, role, branch_id, active, updated_at });
+impl_from_row!(RawCourse { id, branch_id, name, duration, duration_type, letterhead, active, updated_at });
+impl_from_row!(
+    RawStudent {
+        id,
+        form_seq,
+        form_year,
+        form_no,
+        admission_date,
+        branch_id,
+        course_id,
+        student_name,
+        surname,
+        father_name,
+        category,
+        religion,
+        caste,
+        gender,
+        aadhar,
+        address,
+        student_phone,
+        parent_phone,
+        fee_year_1,
+        fee_year_2,
+        fee_year_3,
+        fee_year_4,
+        tuition_fee_year_1,
+        tuition_fee_year_2,
+        tuition_fee_year_3,
+        tuition_fee_year_4,
+        other_fee_year_1,
+        other_fee_year_2,
+        other_fee_year_3,
+        other_fee_year_4,
+        current_course_year,
+        current_course_period,
+        admission_cancelled,
+        admission_cancelled_at,
+        admission_cancelled_by,
+        created_by,
+        created_at,
+        updated_at,
+    }
+);
+impl_from_row!(
+    RawReceipt {
+        id,
+        receipt_seq,
+        receipt_year,
+        receipt_no,
+        receipt_date,
+        student_id,
+        branch_id,
+        fee_type,
+        amount_paid,
+        payment_mode,
+        reference_no,
+        cancelled,
+        cancelled_at,
+        cancelled_by,
+        created_by,
+        created_at,
+        updated_at,
+    }
+);
+impl_from_row!(RawSequence { branch_id, doc_type, academic_year, last_value });
+impl_from_row!(RawSettings { academic_year_start_month, form_type_code, receipt_type_code, updated_at });
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ConfigSnapshot {
@@ -176,8 +257,7 @@ pub struct ImportSummary {
 }
 
 fn placeholders(n: usize) -> String {
-    std::iter::repeat("?")
-        .take(n)
+    std::iter::repeat_n("?", n)
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -581,11 +661,9 @@ fn prune_snapshots(dir: &Path) {
             .and_then(|n| n.to_str())
             .map(|n| n.chars().take(13).collect::<String>())
             .unwrap_or_default();
-        if !days_kept.contains(&day) {
-            if days_kept.len() < KEEP_SNAPSHOT_DAYS {
-                days_kept.push(day);
-                keep.insert(snap.clone());
-            }
+        if !days_kept.contains(&day) && days_kept.len() < KEEP_SNAPSHOT_DAYS {
+            days_kept.push(day);
+            keep.insert(snap.clone());
         }
     }
     for snap in &snaps {

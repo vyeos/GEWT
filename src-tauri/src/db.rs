@@ -13,7 +13,7 @@ use argon2::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-use sqlx::FromRow;
+use sqlx::Row;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -341,14 +341,14 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
 // Data types (shapes match the frontend TypeScript types exactly)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Branch {
     pub id: String,
     pub code: String,
     pub name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Course {
     pub id: String,
     pub branch_id: String,
@@ -359,7 +359,7 @@ pub struct Course {
     pub active: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct User {
     pub id: String,
     pub user_id: String,
@@ -369,7 +369,7 @@ pub struct User {
     pub active: bool,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize)]
 pub struct Me {
     pub id: String,
     pub user_id: String,
@@ -382,7 +382,7 @@ pub struct Me {
     pub receipt_type_code: String,
 }
 
-#[derive(Debug, Serialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Student {
     pub id: String,
     pub form_no: String,
@@ -421,7 +421,7 @@ pub struct Student {
     pub admission_cancelled_at: Option<String>,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize)]
 pub struct Receipt {
     pub id: String,
     pub receipt_no: String,
@@ -464,6 +464,89 @@ pub struct OutstandingRow {
     pub last_receipt_no: Option<String>,
     pub year_breakdown: Vec<OutstandingYearBreakdown>,
 }
+
+macro_rules! impl_from_row {
+    ($ty:ty { $($field:ident),+ $(,)? }) => {
+        impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for $ty {
+            fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+                Ok(Self {
+                    $($field: row.try_get(stringify!($field))?,)+
+                })
+            }
+        }
+    };
+}
+
+impl_from_row!(Branch { id, code, name });
+impl_from_row!(Course { id, branch_id, name, duration, duration_type, letterhead, active });
+impl_from_row!(User { id, user_id, name, role, branch_id, active });
+impl_from_row!(
+    Me {
+        id,
+        user_id,
+        name,
+        role,
+        branch_id,
+        branch_name,
+        academic_year_start_month,
+        form_type_code,
+        receipt_type_code,
+    }
+);
+impl_from_row!(
+    Student {
+        id,
+        form_no,
+        admission_date,
+        branch_id,
+        branch_name,
+        course_id,
+        course_name,
+        course_duration,
+        course_duration_type,
+        current_course_period,
+        student_name,
+        surname,
+        father_name,
+        category,
+        religion,
+        caste,
+        gender,
+        aadhar,
+        address,
+        student_phone,
+        parent_phone,
+        fee_year_1,
+        fee_year_2,
+        fee_year_3,
+        fee_year_4,
+        tuition_fee_year_1,
+        tuition_fee_year_2,
+        tuition_fee_year_3,
+        tuition_fee_year_4,
+        other_fee_year_1,
+        other_fee_year_2,
+        other_fee_year_3,
+        other_fee_year_4,
+        admission_cancelled,
+        admission_cancelled_at,
+    }
+);
+impl_from_row!(
+    Receipt {
+        id,
+        receipt_no,
+        receipt_date,
+        student_id,
+        branch_id,
+        fee_type,
+        amount_paid,
+        payment_mode,
+        reference_no,
+        cancelled,
+        cancelled_at,
+    }
+);
 
 // Request payloads (from the frontend).
 #[derive(Debug, Deserialize)]
@@ -1404,8 +1487,7 @@ pub async fn promote_students(pool: &SqlitePool, req: PromoteRequest) -> DbResul
         .filter(|id| seen.insert(id.clone()))
         .collect();
 
-    let in_clause = std::iter::repeat("?")
-        .take(ids.len())
+    let in_clause = std::iter::repeat_n("?", ids.len())
         .collect::<Vec<_>>()
         .join(", ");
 
