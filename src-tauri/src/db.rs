@@ -118,6 +118,7 @@ async fn create_schema(pool: &SqlitePool) -> DbResult<()> {
             pincode TEXT NOT NULL DEFAULT '',
             student_phone TEXT NOT NULL DEFAULT '',
             parent_phone TEXT NOT NULL DEFAULT '',
+            photo TEXT NOT NULL DEFAULT '',
             fee_year_1 REAL NOT NULL DEFAULT 0,
             fee_year_2 REAL NOT NULL DEFAULT 0,
             fee_year_3 REAL NOT NULL DEFAULT 0,
@@ -214,6 +215,11 @@ async fn migrate_schema(pool: &SqlitePool) -> DbResult<()> {
             "students",
             "pincode",
             "ALTER TABLE students ADD COLUMN pincode TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "students",
+            "photo",
+            "ALTER TABLE students ADD COLUMN photo TEXT NOT NULL DEFAULT ''",
         ),
         (
             "receipts",
@@ -701,6 +707,7 @@ pub struct Student {
     pub pincode: String,
     pub student_phone: String,
     pub parent_phone: String,
+    pub photo: String,
     pub fee_year_1: f64,
     pub fee_year_2: f64,
     pub fee_year_3: f64,
@@ -835,6 +842,7 @@ impl_from_row!(Student {
     pincode,
     student_phone,
     parent_phone,
+    photo,
     fee_year_1,
     fee_year_2,
     fee_year_3,
@@ -890,6 +898,8 @@ pub struct StudentRequest {
     pub pincode: String,
     pub student_phone: String,
     pub parent_phone: String,
+    #[serde(default)]
+    pub photo: String,
     pub fee_year_1: f64,
     pub fee_year_2: f64,
     pub fee_year_3: f64,
@@ -1614,7 +1624,7 @@ fn student_select(where_clause: &str) -> String {
          c.duration AS course_duration, c.duration_type AS course_duration_type,
          s.current_course_period,
          s.student_name, s.surname, s.father_name, s.category, s.religion, s.caste, s.gender,
-         s.aadhar, s.address, s.district, s.taluka, s.pincode, s.student_phone, s.parent_phone,
+         s.aadhar, s.address, s.district, s.taluka, s.pincode, s.student_phone, s.parent_phone, s.photo,
          s.fee_year_1, s.fee_year_2, s.fee_year_3, s.fee_year_4,
          s.tuition_fee_year_1, s.tuition_fee_year_2, s.tuition_fee_year_3, s.tuition_fee_year_4,
          s.other_fee_year_1, s.other_fee_year_2, s.other_fee_year_3, s.other_fee_year_4,
@@ -1764,10 +1774,10 @@ pub async fn create_student(
     let seq = next_seq(&mut tx, &req.branch_id, "form", year).await?;
     let form_no = compose_form_no(&bcode, seq, year);
     sqlx::query(
-        "INSERT INTO students (id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, district, taluka, pincode, student_phone, parent_phone,
+        "INSERT INTO students (id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, district, taluka, pincode, student_phone, parent_phone, photo,
             fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4,
             current_course_year, current_course_period, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?)",
     )
     .bind(&id)
     .bind(seq)
@@ -1790,6 +1800,7 @@ pub async fn create_student(
     .bind(req.pincode.trim())
     .bind(req.student_phone.trim())
     .bind(req.parent_phone.trim())
+    .bind(req.photo.trim())
     .bind(fees.yearly[0])
     .bind(fees.yearly[1])
     .bind(fees.yearly[2])
@@ -1846,7 +1857,7 @@ pub async fn update_student(pool: &SqlitePool, id: &str, req: StudentRequest) ->
     // Form numbering is assigned once at admission and never changes on edit.
     sqlx::query(
         "UPDATE students SET admission_date = ?, course_id = ?, current_course_year = ?, current_course_period = ?,
-            student_name = ?, surname = ?, father_name = ?, category = ?, religion = ?, caste = ?, gender = ?, aadhar = ?, address = ?, district = ?, taluka = ?, pincode = ?, student_phone = ?, parent_phone = ?,
+            student_name = ?, surname = ?, father_name = ?, category = ?, religion = ?, caste = ?, gender = ?, aadhar = ?, address = ?, district = ?, taluka = ?, pincode = ?, student_phone = ?, parent_phone = ?, photo = ?,
             fee_year_1 = ?, fee_year_2 = ?, fee_year_3 = ?, fee_year_4 = ?, tuition_fee_year_1 = ?, tuition_fee_year_2 = ?, tuition_fee_year_3 = ?, tuition_fee_year_4 = ?,
             other_fee_year_1 = ?, other_fee_year_2 = ?, other_fee_year_3 = ?, other_fee_year_4 = ?, updated_at = ?
          WHERE id = ?",
@@ -1869,6 +1880,7 @@ pub async fn update_student(pool: &SqlitePool, id: &str, req: StudentRequest) ->
     .bind(req.pincode.trim())
     .bind(req.student_phone.trim())
     .bind(req.parent_phone.trim())
+    .bind(req.photo.trim())
     .bind(fees.yearly[0])
     .bind(fees.yearly[1])
     .bind(fees.yearly[2])

@@ -741,6 +741,7 @@ mod smoke_tests {
             pincode: String::new(),
             student_phone: String::new(),
             parent_phone: String::new(),
+            photo: String::new(),
             fee_year_1: fee,
             fee_year_2: 0.0,
             fee_year_3: 0.0,

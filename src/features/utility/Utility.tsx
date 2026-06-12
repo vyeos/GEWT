@@ -4,8 +4,6 @@ import {
   ArchiveRestore,
   BookOpen,
   GraduationCap,
-  ImageIcon,
-  ImageOff,
   KeyRound,
   Pencil,
   Plus,
@@ -75,7 +73,7 @@ import {
   updateBranchCode,
 } from "@/lib/api";
 import { PAGE_ACCESS, pageAccessLabels, type PageAccessField } from "@/lib/access";
-import { fetchLetterheads, letterheadSrc } from "@/lib/letterhead";
+import { fetchLetterheads } from "@/lib/letterhead";
 import type { Branch, Course, Me, User } from "@/types";
 
 // Radix Select items can't use an empty string value, so "none" is the sentinel
@@ -719,52 +717,6 @@ export function Utility({
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-                <div className="mt-1 flex flex-col gap-4 sm:flex-row sm:items-stretch">
-                  <div className="flex aspect-[1/1.414] w-full max-w-[10rem] shrink-0 items-center justify-center rounded-lg border border-dashed bg-muted/30 p-3">
-                    {course.letterhead ? (
-                      <img
-                        src={letterheadSrc(course.letterhead)}
-                        alt="Letterhead preview"
-                        className="max-h-full w-auto max-w-full rounded-md border bg-white object-contain shadow-sm"
-                      />
-                    ) : letterheads.length === 0 ? (
-                      <ImageOff className="size-7 text-muted-foreground/60" />
-                    ) : (
-                      <ImageIcon className="size-7 text-muted-foreground/60" />
-                    )}
-                  </div>
-                  <div className="flex flex-col justify-center gap-1 text-sm">
-                    {course.letterhead ? (
-                      <>
-                        <p className="font-medium">Letterhead selected</p>
-                        <p className="text-muted-foreground">
-                          Receipts and admission forms for this course will print
-                          on the letterhead shown here.
-                        </p>
-                      </>
-                    ) : letterheads.length === 0 ? (
-                      <>
-                        <p className="font-medium">No letterheads available</p>
-                        <p className="text-muted-foreground">
-                          Letterheads are bundled with the app. Add images to{" "}
-                          <code className="rounded bg-muted px-1 py-0.5 text-xs">
-                            public/letterheads/
-                          </code>{" "}
-                          in the project and rebuild the app to make them
-                          available here.
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <p className="font-medium">No letterhead selected</p>
-                        <p className="text-muted-foreground">
-                          Pick a letterhead above to brand this course's printed
-                          documents, or leave it as None.
-                        </p>
-                      </>
-                    )}
-                  </div>
-                </div>
               </div>
               <DialogFooter className="pt-2">
                 <Button

@@ -2,8 +2,6 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
   Check,
   ChevronsUpDown,
-  ImageIcon,
-  ImageOff,
   Printer,
   UserPlus,
 } from "lucide-react";
@@ -29,7 +27,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { api, previewFormNo } from "@/lib/api";
 import { getCourseDuration } from "@/lib/course-duration";
 import { money, today } from "@/lib/format";
-import { letterheadSrc } from "@/lib/letterhead";
 import { printPage } from "@/lib/print";
 import { cn } from "@/lib/utils";
 import type { Branch, Course, Me, Student } from "@/types";
@@ -406,59 +403,6 @@ export function Admission({
             <div className="flex flex-col gap-2">
               <Label>Duration</Label>
               <Input value={durationValue} disabled />
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <Label>Letterhead</Label>
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-stretch">
-              <div className="flex aspect-[1/1.414] w-full max-w-[12rem] shrink-0 items-center justify-center rounded-lg border border-dashed bg-muted/30 p-3">
-                {selectedCourse?.letterhead ? (
-                  <img
-                    src={letterheadSrc(selectedCourse.letterhead)}
-                    alt={`${selectedCourse.name} letterhead preview`}
-                    className="max-h-full w-auto max-w-full rounded-md border bg-white object-contain shadow-sm"
-                  />
-                ) : selectedCourse ? (
-                  <ImageOff className="size-7 text-muted-foreground/60" />
-                ) : (
-                  <ImageIcon className="size-7 text-muted-foreground/60" />
-                )}
-              </div>
-              <div className="flex flex-col justify-center gap-1 text-sm">
-                {selectedCourse?.letterhead ? (
-                  <>
-                    <p className="font-medium">Prints on this letterhead</p>
-                    <p className="text-muted-foreground">
-                      The{" "}
-                      <span className="font-medium text-foreground">
-                        {selectedCourse.name}
-                      </span>{" "}
-                      letterhead shown here is applied to the printed admission
-                      form.
-                    </p>
-                  </>
-                ) : selectedCourse ? (
-                  <>
-                    <p className="font-medium">No letterhead yet</p>
-                    <p className="text-muted-foreground">
-                      <span className="font-medium text-foreground">
-                        {selectedCourse.name}
-                      </span>{" "}
-                      has no letterhead, so the form prints without branding. Add
-                      one from the Utility page.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <p className="font-medium">Preview the letterhead</p>
-                    <p className="text-muted-foreground">
-                      Select a course to preview the letterhead the admission
-                      form will print on.
-                    </p>
-                  </>
-                )}
-              </div>
             </div>
           </div>
 

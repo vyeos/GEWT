@@ -98,6 +98,8 @@ struct RawStudent {
     pincode: String,
     student_phone: String,
     parent_phone: String,
+    #[serde(default)]
+    photo: String,
     fee_year_1: f64,
     fee_year_2: f64,
     fee_year_3: f64,
@@ -226,6 +228,7 @@ impl_from_row!(RawStudent {
     pincode,
     student_phone,
     parent_phone,
+    photo,
     fee_year_1,
     fee_year_2,
     fee_year_3,
@@ -410,7 +413,7 @@ async fn fetch_students(
     in_clause: &str,
 ) -> BackupResult<Vec<RawStudent>> {
     let sql = format!(
-        "SELECT id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, district, taluka, pincode, student_phone, parent_phone,
+        "SELECT id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, district, taluka, pincode, student_phone, parent_phone, photo,
             fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4,
             current_course_year, current_course_period, admission_cancelled, admission_cancelled_at, admission_cancelled_by, created_by, created_at, updated_at
          FROM students WHERE branch_id IN ({in_clause})"
