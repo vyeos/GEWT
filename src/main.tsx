@@ -1,5 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import "@fontsource/geist/latin-400.css";
+import "@fontsource/geist/latin-500.css";
+import "@fontsource/geist/latin-700.css";
 import App from "./App";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

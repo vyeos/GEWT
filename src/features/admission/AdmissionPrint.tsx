@@ -1,6 +1,4 @@
 import { createPortal } from "react-dom";
-import { money } from "@/lib/format";
-import { getCourseDuration } from "@/lib/course-duration";
 import { PrintPage } from "@/components/print/PrintPage";
 import type { Branch, Course } from "@/types";
 
@@ -35,94 +33,72 @@ export function AdmissionPrint({
   if (!admission)
     return createPortal(<div id="admission-print" />, document.body);
 
-  const courseLine = course
-    ? `${course.name}${branch ? ` — ${branch.name}` : ""}`
-    : "";
-  const duration = course ? getCourseDuration(course).label : "";
+  const admissionYear = admission.admission_date.slice(0, 4);
+  const courseLine = course?.name ?? "";
 
   return createPortal(
     <div id="admission-print">
-      <PrintPage letterhead={course?.letterhead}>
-        <div className="mb-4 text-center text-lg font-semibold uppercase tracking-wide">
-          Admission Form
-        </div>
+      <PrintPage
+        letterhead={course?.letterhead}
+        contentClassName="inset-x-[3%] top-[25.2%] bottom-[17%] text-[15px]"
+      >
+        <div className="pb-1.5 pt-2">
+          <div className="mb-4 grid min-h-8 grid-cols-[1fr_auto_1fr] items-start gap-3">
+            <div className="min-w-0 break-words text-[16px] leading-tight">
+              <span className="font-bold">Form No:</span>
+              <span className="ml-3">{uppercase(admission.form_no)}</span>
+            </div>
+            <div className="border border-black px-8 py-0.5 text-center text-[18px] font-bold uppercase leading-tight">
+              Admission Form
+            </div>
+            <div />
+          </div>
 
-        <div className="mb-4 flex justify-between">
-          <span>
-            <b>Form No:</b> {admission.form_no}
-          </span>
-          <span>
-            <b>Date:</b> {admission.admission_date}
-          </span>
-        </div>
+          <div className="mb-14 grid grid-cols-3 gap-6 text-center">
+            <LineField label="Admission Year" value={admissionYear} />
+            {courseLine && <LineField label="Admission For" value={courseLine} />}
+            {branch && <LineField label="Branch" value={branch.name} />}
+          </div>
 
-        <table className="mb-3 w-full border-collapse">
-          <tbody>
-            {courseLine && <Row label="Course" value={courseLine} />}
-            {duration && <Row label="Duration" value={duration} />}
-            {admission.surname && (
-              <Row label="Surname" value={admission.surname} />
-            )}
-            <Row label="Student's Name" value={admission.student_name} />
-            {admission.father_name && (
-              <Row label="Father's Name" value={admission.father_name} />
-            )}
-            <Row label="Category" value={admission.category} />
+          <div className="mb-2 text-[16px] font-bold">Name of the Applicant</div>
+          <div className="mb-3 grid grid-cols-3 gap-6 text-center">
+            <LineField label="Surname" value={admission.surname} />
+            <LineField label="Student Name" value={admission.student_name} />
+            <LineField label="Father Name" value={admission.father_name} />
+          </div>
+
+          <div className="mb-3 grid grid-cols-4 gap-5 text-center">
             {admission.religion && (
-              <Row label="Religion" value={admission.religion} />
+              <LineField label="Religion" value={admission.religion} />
             )}
-            {admission.caste && <Row label="Caste" value={admission.caste} />}
-            <Row label="Gender" value={admission.gender} />
-            {admission.aadhar && (
-              <Row label="Aadhar No" value={admission.aadhar} />
+            {admission.caste && (
+              <LineField label="Cast" value={admission.caste} />
             )}
+            <LineField label="Category" value={admission.category} />
+            <LineField label="Gender" value={admission.gender} />
+          </div>
+
+          {admission.address && (
+            <BlockLine label="Complete Native Address :" value={admission.address} />
+          )}
+
+          <div className="mt-3 grid grid-cols-2 gap-8 text-center">
             {admission.student_phone && (
-              <Row label="Student Phone" value={admission.student_phone} />
+              <LineField
+                label="Student Mobile No"
+                value={admission.student_phone}
+              />
             )}
             {admission.parent_phone && (
-              <Row label="Parent Phone" value={admission.parent_phone} />
+              <LineField
+                label="Parent Mobile No"
+                value={admission.parent_phone}
+              />
             )}
-            {admission.address && (
-              <Row label="Address" value={admission.address} />
-            )}
-          </tbody>
-        </table>
-
-        <table className="mb-3 w-full border-collapse text-left">
-          <thead>
-            <tr className="border-y border-black">
-              <th className="py-1.5">Fee Type</th>
-              <th className="py-1.5 text-right">Amount (per year)</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr className="border-b border-black/40">
-              <td className="py-1.5">Tuition Fee</td>
-              <td className="py-1.5 text-right">{money(admission.tuition_fee)}</td>
-            </tr>
-            <tr className="border-b border-black/40">
-              <td className="py-1.5">Other Fee</td>
-              <td className="py-1.5 text-right">{money(admission.other_fee)}</td>
-            </tr>
-            <tr className="font-semibold">
-              <td className="py-1.5">Yearly Fee</td>
-              <td className="py-1.5 text-right">{money(admission.yearly_fee)}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div className="mt-auto flex justify-between">
-          <div className="text-center">
-            <div className="mb-1 h-12" />
-            <div className="border-t border-black px-8 pt-1">
-              Student Signature
-            </div>
           </div>
-          <div className="text-center">
-            <div className="mb-1 h-12" />
-            <div className="border-t border-black px-8 pt-1">
-              Authorised Signature
-            </div>
+
+          <div className="mt-6 grid grid-cols-3 gap-5 text-center">
+            <LineField label="Admission Date" value={displayDate(admission.admission_date)} />
           </div>
         </div>
       </PrintPage>
@@ -131,11 +107,33 @@ export function AdmissionPrint({
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function displayDate(value: string) {
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${day}/${month}/${year}` : value;
+}
+
+function uppercase(value: string) {
+  return value.toUpperCase();
+}
+
+function LineField({ label, value }: { label: string; value: string }) {
   return (
-    <tr>
-      <td className="w-40 py-0.5 align-top font-semibold">{label}</td>
-      <td className="py-0.5 align-top">: {value}</td>
-    </tr>
+    <div className="min-w-0">
+      <div className="mb-2 font-bold leading-tight">{label}</div>
+      <div className="min-h-6 border-b-2 border-black px-1 text-[16px] leading-6">
+        {uppercase(value)}
+      </div>
+    </div>
+  );
+}
+
+function BlockLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="mt-2">
+      <div className="mb-2 font-bold">{label}</div>
+      <div className="min-h-7 border-b-2 border-black text-[16px] leading-7">
+        {uppercase(value)}
+      </div>
+    </div>
   );
 }

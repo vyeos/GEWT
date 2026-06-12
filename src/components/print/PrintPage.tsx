@@ -16,9 +16,11 @@ import type { Course } from "@/types";
  */
 export function PrintPage({
   letterhead,
+  contentClassName,
   children,
 }: {
   letterhead: Course["letterhead"] | undefined;
+  contentClassName?: string;
   children: ReactNode;
 }) {
   const [usingFallback, setUsingFallback] = useState(!letterhead);
@@ -28,7 +30,7 @@ export function PrintPage({
   }, [letterhead]);
 
   return (
-    <div className="relative h-[297mm] w-[210mm] overflow-hidden bg-white font-serif text-black">
+    <div className="relative h-[297mm] w-[210mm] overflow-hidden bg-white font-['Geist',Arial,sans-serif] text-black">
       <img
         src={letterheadSrc(letterhead)}
         alt=""
@@ -45,7 +47,12 @@ export function PrintPage({
           e.currentTarget.src = LETTERHEAD_FALLBACK;
         }}
       />
-      <div className="absolute inset-x-[8%] top-[23%] bottom-[17%] flex flex-col text-[15px]">
+      <div
+        className={cn(
+          "absolute inset-x-[8%] top-[23%] bottom-[17%] flex flex-col text-[15px]",
+          contentClassName,
+        )}
+      >
         {children}
       </div>
     </div>

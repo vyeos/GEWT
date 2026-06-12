@@ -1,6 +1,11 @@
 import { createPortal } from "react-dom";
-import { amountInWords, money } from "@/lib/format";
-import { formatCourseYear, getCurrentCourseYear } from "@/lib/course-duration";
+import { amountInWords, today } from "@/lib/format";
+import {
+  formatCoursePeriod,
+  formatCourseYear,
+  getCurrentCoursePeriod,
+  getCurrentCourseYear,
+} from "@/lib/course-duration";
 import { PrintPage } from "@/components/print/PrintPage";
 import type { Branch, Course, PaymentMode, Student } from "@/types";
 
@@ -15,7 +20,6 @@ export type PrintableReceipt = {
 
 export function ReceiptPrint({
   student,
-  branch,
   course,
   receipt,
 }: {
@@ -28,72 +32,74 @@ export function ReceiptPrint({
     return createPortal(<div id="receipt-print" />, document.body);
 
   const year = getCurrentCourseYear(student);
+  const period = getCurrentCoursePeriod(student);
+  const periodLabel = `${formatCourseYear(year)}-${formatCoursePeriod(
+    student,
+    period,
+  )}`;
+  const receiptYear = receipt.receipt_date.slice(0, 4);
+  const paymentDetail = receipt.reference_no
+    ? `${receipt.payment_mode} / ${receipt.reference_no}`
+    : receipt.payment_mode;
 
   return createPortal(
     <div id="receipt-print">
-      <PrintPage letterhead={course?.letterhead}>
-        <div className="mb-6 text-center text-lg font-semibold uppercase tracking-wide">
-          Fee Receipt
-        </div>
+      <PrintPage
+        letterhead={course?.letterhead}
+        contentClassName="inset-x-[3%] top-[21.5%] bottom-auto text-[16px]"
+      >
+        <div className="border-y-2 border-black py-2">
+          <div className="mb-4 grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+            <div>
+              Receipt No. : <span>{uppercase(String(receipt.receipt_no))}</span>
+            </div>
+            <div className="font-bold">Original Copy</div>
+            <div className="text-right">
+              Date. : <span>{displayDate(today())}</span>
+            </div>
+          </div>
 
-        <div className="mb-6 flex justify-between">
-          <span>
-            <b>Receipt No:</b> {receipt.receipt_no}
-          </span>
-          <span>
-            <b>Date:</b> {receipt.receipt_date}
-          </span>
-        </div>
+          <div className="mb-4 grid grid-cols-[auto_minmax(0,1fr)_auto_minmax(8rem,12rem)] items-end gap-x-3">
+            <span>Received with thanks from</span>
+            <UnderlinedValue value={student.student_name} />
+            <span>Course :</span>
+            <UnderlinedValue value={`${student.course_name}: ${periodLabel}`} />
+          </div>
 
-        <table className="mb-6 w-full border-collapse">
-          <tbody>
-            <Row label="Student Name" value={student.student_name} />
-            <Row label="Form No" value={student.form_no} />
-            <Row
-              label="Course"
-              value={`${student.course_name}${branch ? ` — ${branch.name}` : ""}`}
-            />
-            <Row label="Current Year" value={formatCourseYear(year)} />
-            {student.parent_phone && (
-              <Row label="Parent Phone" value={student.parent_phone} />
-            )}
-          </tbody>
-        </table>
+          <div className="mb-4 grid grid-cols-[auto_auto_minmax(0,1fr)] items-end gap-x-3">
+            <span>the sum of Rs.</span>
+            <span>(In words)</span>
+            <UnderlinedValue value={receiptWords(receipt.amount_paid)} />
+          </div>
 
-        <table className="mb-6 w-full border-collapse text-left">
-          <thead>
-            <tr className="border-y border-black">
-              <th className="py-1.5">Fee Type</th>
-              <th className="py-1.5">Payment Mode</th>
-              <th className="py-1.5">Remarks</th>
-              <th className="py-1.5 text-right">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr className="border-b border-black/40">
-              <td className="py-1.5">{receipt.fee_type || "Tuition"}</td>
-              <td className="py-1.5">{receipt.payment_mode}</td>
-              <td className="py-1.5">{receipt.reference_no || "—"}</td>
-              <td className="py-1.5 text-right">{money(receipt.amount_paid)}</td>
-            </tr>
-            <tr className="font-semibold">
-              <td className="py-1.5" colSpan={3}>
-                Total
-              </td>
-              <td className="py-1.5 text-right">{money(receipt.amount_paid)}</td>
-            </tr>
-          </tbody>
-        </table>
+          <div className="mb-7 grid grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,0.7fr)_auto_minmax(0,0.7fr)_auto_auto] items-end gap-x-3">
+            <span>by</span>
+            <UnderlinedValue value={paymentDetail} />
+            <span>Dated</span>
+            <UnderlinedValue value={displayDate(receipt.receipt_date)} />
+            <span>Drawn on</span>
+            <UnderlinedValue value={receipt.fee_type || "Tuition"} />
+            <span>Yr.</span>
+            <UnderlinedValue value={receiptYear} />
+          </div>
 
-        <p>
-          <b>Amount in words:</b> {amountInWords(receipt.amount_paid)}
-        </p>
+          <div className="mb-7 flex items-center gap-3">
+            <div className="rounded border-2 border-black px-2 py-0.5 text-[24px] font-bold">
+              Rs.
+            </div>
+            <div className="min-w-44 rounded border-2 border-black px-5 py-0.5 text-right text-[24px] font-bold">
+              {amountNumber(receipt.amount_paid)}
+            </div>
+          </div>
 
-        <div className="mt-auto flex justify-end">
-          <div className="text-center">
-            <div className="mb-1 h-12" />
-            <div className="border-t border-black px-8 pt-1">
-              Authorised Signature
+          <div className="flex items-end justify-between gap-8 text-[17px]">
+            <div className="whitespace-nowrap text-[12px] font-medium">
+              * Subject to Sabarkantha Jurisdiction, &nbsp; * Fees Once are Paid
+              non Refundable.
+            </div>
+            <div className="min-w-32 text-center">
+              <div className="mb-1 h-12 border-b border-black" />
+              <div className="font-bold">For, VIN</div>
             </div>
           </div>
         </div>
@@ -103,11 +109,27 @@ export function ReceiptPrint({
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function displayDate(value: string) {
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${day}/${month}/${year}` : value;
+}
+
+function amountNumber(value: number) {
+  return (value || 0).toFixed(2);
+}
+
+function receiptWords(value: number) {
+  return amountInWords(value).replace(/^Rupees\s+/i, "");
+}
+
+function uppercase(value: string) {
+  return value.toUpperCase();
+}
+
+function UnderlinedValue({ value }: { value: string }) {
   return (
-    <tr>
-      <td className="w-40 py-1 align-top font-semibold">{label}</td>
-      <td className="py-1 align-top">: {value}</td>
-    </tr>
+    <span className="min-w-0 border-b-2 border-black px-2 text-left font-medium leading-7">
+      {value ? uppercase(value) : "\u00a0"}
+    </span>
   );
 }
