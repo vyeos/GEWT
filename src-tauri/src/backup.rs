@@ -615,13 +615,13 @@ pub async fn import_backup(
 
     for s in &backup.data.students {
         sqlx::query(
-            "INSERT INTO students (id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, district, taluka, pincode, student_phone, parent_phone,
+            "INSERT INTO students (id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, district, taluka, pincode, student_phone, parent_phone, photo,
                 fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4,
                 current_course_year, current_course_period, admission_cancelled, admission_cancelled_at, admission_cancelled_by, created_by, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&s.id).bind(s.form_seq).bind(s.form_year).bind(&s.form_no).bind(&s.admission_date).bind(&s.branch_id).bind(&s.course_id)
-        .bind(&s.student_name).bind(&s.surname).bind(&s.father_name).bind(&s.category).bind(&s.religion).bind(&s.caste).bind(&s.gender).bind(&s.aadhar).bind(&s.address).bind(&s.district).bind(&s.taluka).bind(&s.pincode).bind(&s.student_phone).bind(&s.parent_phone)
+        .bind(&s.student_name).bind(&s.surname).bind(&s.father_name).bind(&s.category).bind(&s.religion).bind(&s.caste).bind(&s.gender).bind(&s.aadhar).bind(&s.address).bind(&s.district).bind(&s.taluka).bind(&s.pincode).bind(&s.student_phone).bind(&s.parent_phone).bind(&s.photo)
         .bind(s.fee_year_1).bind(s.fee_year_2).bind(s.fee_year_3).bind(s.fee_year_4)
         .bind(s.tuition_fee_year_1).bind(s.tuition_fee_year_2).bind(s.tuition_fee_year_3).bind(s.tuition_fee_year_4)
         .bind(s.other_fee_year_1).bind(s.other_fee_year_2).bind(s.other_fee_year_3).bind(s.other_fee_year_4)

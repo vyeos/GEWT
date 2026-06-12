@@ -19,6 +19,7 @@ export type PrintableAdmission = {
   pincode: string;
   student_phone: string;
   parent_phone: string;
+  photo: string;
   yearly_fee: number;
   tuition_fee: number;
   other_fee: number;
@@ -54,7 +55,15 @@ export function AdmissionPrint({
             <div className="border border-black px-8 py-0.5 text-center text-[18px] font-bold uppercase leading-tight">
               Admission Form
             </div>
-            <div />
+            <div className="flex justify-end">
+              {admission.photo && (
+                <img
+                  src={admission.photo}
+                  alt=""
+                  className="h-[120px] w-[96px] border border-black object-cover"
+                />
+              )}
+            </div>
           </div>
 
           <div className="mb-14 grid grid-cols-3 gap-6 text-center">

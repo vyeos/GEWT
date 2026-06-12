@@ -46,6 +46,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { StudentPhotoField } from "@/components/app/StudentPhotoField";
 import { api } from "@/lib/api";
 import {
   formatCoursePeriod,
@@ -85,6 +86,7 @@ type StudentForm = {
   pincode: string;
   student_phone: string;
   parent_phone: string;
+  photo: string;
   fee_year_1: number;
   fee_year_2: number;
   fee_year_3: number;
@@ -137,6 +139,7 @@ function toForm(student: Student): StudentForm {
     pincode: student.pincode,
     student_phone: student.student_phone,
     parent_phone: student.parent_phone,
+    photo: student.photo,
     fee_year_1: student.fee_year_1,
     fee_year_2: student.fee_year_2,
     fee_year_3: student.fee_year_3,
@@ -350,6 +353,7 @@ export function Students({
       pincode: form.pincode,
       student_phone: form.student_phone,
       parent_phone: form.parent_phone,
+      photo: form.photo,
       yearly_fee: form.fee_year_1,
       tuition_fee: form.tuition_fee_year_1,
       other_fee: form.other_fee_year_1,
@@ -646,6 +650,12 @@ export function Students({
                 />
               </div>
             </div>
+
+            <StudentPhotoField
+              value={form.photo}
+              onChange={(photo) => updateForm("photo", photo)}
+              disabled={saving || isCancelled}
+            />
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div className="flex flex-col gap-2">

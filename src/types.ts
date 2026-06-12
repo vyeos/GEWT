@@ -67,6 +67,7 @@ export type Student = {
   pincode: string;
   student_phone: string;
   parent_phone: string;
+  photo: string;
   fee_year_1: number;
   fee_year_2: number;
   fee_year_3: number;

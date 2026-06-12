@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { StudentPhotoField } from "@/components/app/StudentPhotoField";
 import { api, previewFormNo } from "@/lib/api";
 import { getCourseDuration } from "@/lib/course-duration";
 import { money, today } from "@/lib/format";
@@ -70,6 +71,7 @@ export function Admission({
     pincode: "",
     student_phone: "",
     parent_phone: "",
+    photo: "",
     yearly_fee: 0,
     tuition_fee: 0,
     other_fee: 0,
@@ -237,6 +239,7 @@ export function Admission({
           pincode: form.pincode,
           student_phone: form.student_phone,
           parent_phone: form.parent_phone,
+          photo: form.photo,
           yearly_fee,
           tuition_fee,
           other_fee,
@@ -405,6 +408,12 @@ export function Admission({
               <Input value={durationValue} disabled />
             </div>
           </div>
+
+          <StudentPhotoField
+            value={form.photo}
+            onChange={(photo) => setForm((current) => ({ ...current, photo }))}
+            disabled={isSaving}
+          />
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="flex flex-col gap-2">
