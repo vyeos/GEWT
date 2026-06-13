@@ -96,6 +96,28 @@ export function restoreSnapshot(path: string): Promise<void> {
   return call<void>("restore_snapshot", { path });
 }
 
+// --- LAN mode (shared database over a network folder) ----------------------
+
+export type BootInfo = {
+  lan_active: boolean;
+  db_path: string | null;
+  error: string | null;
+};
+
+export function bootStatus(): Promise<BootInfo> {
+  return call<BootInfo>("boot_status");
+}
+
+// Point this machine at a shared folder (absolute path) or back to local (null).
+// Takes effect after a relaunch.
+export function setLanDbPath(dir: string | null): Promise<void> {
+  return call<void>("set_lan_db_path", { dir });
+}
+
+export function dbDataVersion(): Promise<number> {
+  return call<number>("db_data_version");
+}
+
 // --- Compatibility dispatcher ----------------------------------------------
 //
 // The feature components were written against a REST-style `api(path, token,

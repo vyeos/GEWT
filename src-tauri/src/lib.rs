@@ -1,5 +1,6 @@
 mod backup;
 mod db;
+mod lan;
 
 use db::{
     Branch, Course, CourseRequest, Me, OutstandingRow, PromoteRequest, PromoteResponse, Receipt,
@@ -32,7 +33,21 @@ struct AppState {
     pool: SqlitePool,
     db_path: PathBuf,
     data_dir: PathBuf,
+    /// True when the open database lives in a shared LAN folder rather than this
+    /// machine's app-data dir. Gates network-unsafe behaviour (auto snapshots)
+    /// and enables realtime polling on the frontend.
+    lan_active: bool,
     session: Arc<RwLock<Option<Session>>>,
+}
+
+/// Startup outcome the frontend reads before anything else. When `error` is set
+/// the database could not be opened (e.g. a configured LAN folder is offline);
+/// `AppState` is then NOT managed and the UI shows a recovery screen instead.
+#[derive(Clone, Serialize)]
+struct BootInfo {
+    lan_active: bool,
+    db_path: Option<String>,
+    error: Option<String>,
 }
 
 impl AppState {
@@ -421,6 +436,59 @@ async fn update_settings(
 }
 
 // ---------------------------------------------------------------------------
+// LAN mode (shared database over a network folder)
+// ---------------------------------------------------------------------------
+
+/// Read the startup outcome. The frontend calls this first: if `error` is set it
+/// shows the recovery screen; otherwise it proceeds and uses `lan_active` to
+/// decide whether to poll for other machines' changes.
+#[tauri::command]
+fn boot_status(boot: tauri::State<'_, BootInfo>) -> BootInfo {
+    boot.inner().clone()
+}
+
+/// Point this machine at a shared database folder (`Some`) or back to its local
+/// database (`None`). Takes effect on the next launch (the caller relaunches).
+///
+/// This only rewrites this machine's local pointer; it never touches data. When
+/// the app booted normally we require an admin session, but when it failed to
+/// boot (no pool, so no possible login) we allow it so the recovery screen can
+/// switch back to local.
+#[tauri::command]
+async fn set_lan_db_path(app: tauri::AppHandle, dir: Option<String>) -> Result<(), String> {
+    if let Some(state) = app.try_state::<AppState>() {
+        state.require_admin().await?;
+    }
+    let dir = dir.map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
+    if let Some(dir) = dir.as_deref() {
+        let path = std::path::Path::new(dir);
+        if !path.is_dir() {
+            return Err("That folder does not exist or is not reachable".to_string());
+        }
+        // Confirm we can actually write into the shared folder before committing
+        // to it, so a read-only mount is caught now rather than at next launch.
+        let probe = path.join(".gewt-write-test");
+        std::fs::write(&probe, b"ok")
+            .map_err(|_| "That folder is not writable from this machine".to_string())?;
+        let _ = std::fs::remove_file(&probe);
+    }
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    lan::write_lan_dir(&data_dir, dir.as_deref().map(std::path::Path::new))
+}
+
+/// SQLite's `data_version` — a counter that changes whenever *another* connection
+/// commits a write. The frontend polls this in LAN mode to detect peers' changes
+/// cheaply without re-running real queries.
+#[tauri::command]
+async fn db_data_version(state: tauri::State<'_, AppState>) -> Result<i64, String> {
+    state.require_session().await?;
+    sqlx::query_scalar("PRAGMA data_version")
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Backup / restore / snapshots
 // ---------------------------------------------------------------------------
 
@@ -632,13 +700,51 @@ pub fn run() {
 
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
-            let db_path = db::db_file(&data_dir);
 
-            let pool = tauri::async_runtime::block_on(async { db::init_db(&data_dir).await })
-                .map_err(|e| Box::new(std::io::Error::other(e)))?;
+            // Resolve where the database lives. A per-machine `lan.json` may point
+            // this machine at a shared `gewt.db` in a network folder; absence of
+            // it (the default) keeps the local, WAL database — unchanged.
+            let lan_dir = lan::read_lan_dir(&data_dir);
+            let lan_active = lan_dir.is_some();
+            let db_path = match &lan_dir {
+                Some(dir) => db::db_file(dir),
+                None => db::db_file(&data_dir),
+            };
 
-            // Take a safety snapshot on launch if the last one is older than ~24h.
-            {
+            // In LAN mode the folder must already be reachable; we never silently
+            // fall back to the local DB, as that would let a clerk enter receipts
+            // into a divergent copy. A failure is surfaced via BootInfo and the
+            // frontend shows a recovery screen.
+            let pool = if lan_active && db_path.parent().map(|p| !p.is_dir()).unwrap_or(true) {
+                Err("Shared database not reachable — reconnect the network drive and retry"
+                    .to_string())
+            } else {
+                tauri::async_runtime::block_on(async {
+                    match &lan_dir {
+                        Some(dir) => db::open_pool(&db::db_file(dir), true).await,
+                        None => db::init_db(&data_dir).await,
+                    }
+                })
+            };
+
+            let pool = match pool {
+                Ok(pool) => pool,
+                Err(error) => {
+                    // Open the window with no AppState; the frontend reads
+                    // BootInfo.error and offers Retry / Switch-to-local.
+                    app.manage(BootInfo {
+                        lan_active,
+                        db_path: Some(db_path.display().to_string()),
+                        error: Some(error),
+                    });
+                    return Ok(());
+                }
+            };
+
+            // Automatic raw-copy snapshots are unsafe while another machine writes
+            // the shared file, so they only run in local mode. (The manual
+            // snapshot command and SQL-based backups remain available in LAN mode.)
+            if !lan_active {
                 let pool = pool.clone();
                 let db_path = db_path.clone();
                 let dir = backup::backups_dir(&data_dir);
@@ -653,10 +759,16 @@ pub fn run() {
                 }
             }
 
+            app.manage(BootInfo {
+                lan_active,
+                db_path: Some(db_path.display().to_string()),
+                error: None,
+            });
             app.manage(AppState {
                 pool,
                 db_path,
                 data_dir,
+                lan_active,
                 session: Arc::new(RwLock::new(None)),
             });
             Ok(())
@@ -665,6 +777,11 @@ pub fn run() {
             // Take a local safety snapshot when the main window closes.
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if let Some(state) = window.app_handle().try_state::<AppState>() {
+                    // Skip in LAN mode: a raw copy of a file another machine may
+                    // be writing could capture an inconsistent snapshot.
+                    if state.lan_active {
+                        return;
+                    }
                     let pool = state.pool.clone();
                     let db_path = state.db_path.clone();
                     let dir = backup::backups_dir(&state.data_dir);
@@ -701,6 +818,9 @@ pub fn run() {
             create_user,
             update_user,
             update_settings,
+            boot_status,
+            set_lan_db_path,
+            db_data_version,
             export_backup,
             import_backup,
             create_snapshot,

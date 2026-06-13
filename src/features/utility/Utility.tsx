@@ -3,7 +3,10 @@ import {
   Archive,
   ArchiveRestore,
   BookOpen,
+  Database,
+  FolderOpen,
   GraduationCap,
+  HardDrive,
   KeyRound,
   Pencil,
   Plus,
@@ -15,6 +18,8 @@ import {
   UserPlus,
   X,
 } from "lucide-react";
+import { ask, open } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -67,10 +72,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   api,
   archiveCourse,
+  bootStatus,
   deleteCourse,
   listAllCourses,
+  setLanDbPath,
   unarchiveCourse,
   updateBranchCode,
+  type BootInfo,
 } from "@/lib/api";
 import { PAGE_ACCESS, pageAccessLabels, type PageAccessField } from "@/lib/access";
 import { fetchLetterheads } from "@/lib/letterhead";
@@ -165,6 +173,8 @@ export function Utility({
   const [branchCodes, setBranchCodes] = useState<Record<string, string>>(() =>
     Object.fromEntries(branches.map((b) => [b.id, b.code])),
   );
+  const [boot, setBoot] = useState<BootInfo | null>(null);
+  const [lanBusy, setLanBusy] = useState(false);
   // Semester courses must split evenly into years.
   const courseDurationError =
     course.duration < 1
@@ -224,6 +234,13 @@ export function Utility({
   useEffect(() => {
     void fetchLetterheads().then(setLetterheads);
   }, []);
+
+  useEffect(() => {
+    if (me.role !== "admin") return;
+    void bootStatus()
+      .then(setBoot)
+      .catch(() => setBoot(null));
+  }, [me.role]);
 
   useEffect(() => {
     async function loadAllCourses() {
@@ -449,6 +466,47 @@ export function Utility({
       toast.error(
         error instanceof Error ? error.message : "Could not update branch code",
       );
+    }
+  }
+
+  async function chooseSharedFolder() {
+    const picked = await open({
+      directory: true,
+      title: "Select the shared database folder",
+    });
+    if (typeof picked !== "string") return;
+    const confirmed = await ask(
+      `Every machine that should share data must point at this same folder:\n\n${picked}\n\nThe app will restart to apply. Host it on a wired, always-on PC.`,
+      { title: "Use shared database", kind: "warning" },
+    );
+    if (!confirmed) return;
+    setLanBusy(true);
+    try {
+      await setLanDbPath(picked);
+      await relaunch();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not set shared folder",
+      );
+      setLanBusy(false);
+    }
+  }
+
+  async function switchToLocal() {
+    const confirmed = await ask(
+      "Switch this machine back to its own local database? The app will restart, and it will no longer share data with other machines.",
+      { title: "Switch to local database", kind: "warning" },
+    );
+    if (!confirmed) return;
+    setLanBusy(true);
+    try {
+      await setLanDbPath(null);
+      await relaunch();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not switch to local",
+      );
+      setLanBusy(false);
     }
   }
 
@@ -1189,6 +1247,64 @@ export function Utility({
                   </Button>
                 </div>
               ))}
+            </CardContent>
+          </Card>
+
+          <Card className="max-w-xl">
+            <CardHeader>
+              <CardTitle>Shared database (LAN)</CardTitle>
+              <CardDescription>
+                Point every machine on the network at one shared database so all
+                users see the same data in real time. Host the folder on a wired,
+                always-on PC; avoid Wi-Fi shares.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex items-start gap-3 rounded-md border p-3">
+                {boot?.lan_active ? (
+                  <Database className="mt-0.5 size-5 text-muted-foreground" />
+                ) : (
+                  <HardDrive className="mt-0.5 size-5 text-muted-foreground" />
+                )}
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">
+                    {boot?.lan_active
+                      ? "Shared database"
+                      : "Local database (this machine only)"}
+                  </p>
+                  {boot?.db_path && (
+                    <p className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
+                      {boot.db_path}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button
+                  type="button"
+                  onClick={() => void chooseSharedFolder()}
+                  disabled={lanBusy}
+                >
+                  <FolderOpen className="size-4" />
+                  Use a shared folder
+                </Button>
+                {boot?.lan_active && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void switchToLocal()}
+                    disabled={lanBusy}
+                  >
+                    <HardDrive className="size-4" />
+                    Switch back to local
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Changing this restarts the app. On Windows, disable "offline
+                files" caching on the shared folder. Offline use is unavailable
+                in shared mode by design.
+              </p>
             </CardContent>
           </Card>
         </div>

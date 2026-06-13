@@ -30,12 +30,35 @@ pub fn db_file(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("gewt.db")
 }
 
+/// Normal local mode: the per-machine database in the app-data dir, opened in
+/// WAL. Unchanged behaviour — used by the smoke tests and every machine that has
+/// not opted into LAN mode.
 pub async fn init_db(app_data_dir: &Path) -> DbResult<SqlitePool> {
-    let db_path = db_file(app_data_dir);
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite:{}?mode=rwc", db_path.display()))
-        .map_err(|e| e.to_string())?
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-        .foreign_keys(true);
+    open_pool(&db_file(app_data_dir), false).await
+}
+
+/// Open (creating if missing) the SQLite database at `db_path` and bring its
+/// schema up to date.
+///
+/// `lan` selects the journal mode. Normal local databases use **WAL**, which is
+/// fast but relies on a shared-memory file that only works when every connection
+/// is on the same host. A database shared across machines over a network folder
+/// must therefore use a rollback journal (**TRUNCATE**) plus a `busy_timeout` so
+/// a writer on one machine makes the others wait rather than fail outright.
+pub async fn open_pool(db_path: &Path, lan: bool) -> DbResult<SqlitePool> {
+    let mut opts =
+        SqliteConnectOptions::from_str(&format!("sqlite:{}?mode=rwc", db_path.display()))
+            .map_err(|e| e.to_string())?
+            .foreign_keys(true);
+    opts = if lan {
+        // Shared over a network folder: rollback journal (WAL can't cross hosts)
+        // and a generous busy_timeout so a peer's write makes us wait, not fail.
+        opts.journal_mode(sqlx::sqlite::SqliteJournalMode::Truncate)
+            .busy_timeout(std::time::Duration::from_secs(15))
+    } else {
+        // Normal local mode — unchanged.
+        opts.journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+    };
     let pool = SqlitePoolOptions::new()
         .max_connections(4)
         .connect_with(opts)
