@@ -200,7 +200,8 @@
    hidden and only the populated template (#receipt-print or #admission-print)
    is shown. Only one is ever populated at a time. */
 #receipt-print,
-#admission-print {
+#admission-print,
+#outstanding-print {
   display: none;
 }
 
@@ -229,7 +230,9 @@
   #receipt-print,
   #receipt-print *,
   #admission-print,
-  #admission-print * {
+  #admission-print *,
+  #outstanding-print,
+  #outstanding-print * {
     visibility: visible;
   }
   #receipt-print,
@@ -243,6 +246,27 @@
     color: #000;
     background: #fff;
     page-break-after: avoid;
+    page-break-inside: avoid;
+  }
+  /* The outstanding report is a multi-row table that may run past one page, so
+     unlike the single-slip receipt/admission forms it must be allowed to flow
+     and paginate. When its template is populated, relax the body clamp that the
+     forms rely on (height:auto/overflow:hidden) so WebKit/Chrome break the table
+     across pages instead of clipping it. The <thead> repeats on every page. */
+  body:has(#outstanding-print > *) {
+    overflow: visible;
+    height: auto;
+  }
+  #outstanding-print {
+    display: block;
+    width: 210mm;
+    color: #000;
+    background: #fff;
+  }
+  #outstanding-print thead {
+    display: table-header-group;
+  }
+  #outstanding-print tr {
     page-break-inside: avoid;
   }
   #receipt-print {

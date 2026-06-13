@@ -1,5 +1,11 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Check, ChevronsUpDown } from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Check, ChevronsUpDown, Printer } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -37,7 +43,8 @@ import {
   getCourseDuration,
   getCurrentCourseYear,
 } from "@/lib/course-duration";
-import { money } from "@/lib/format";
+import { money, today } from "@/lib/format";
+import { printPage } from "@/lib/print";
 import { cn } from "@/lib/utils";
 import type {
   Branch,
@@ -47,6 +54,15 @@ import type {
   OutstandingRow,
   OutstandingYearBreakdown,
 } from "@/types";
+import {
+  OutstandingPrint,
+  type OutstandingPrintRow,
+} from "./OutstandingPrint";
+
+function displayDate(value: string) {
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${day}/${month}/${year}` : value;
+}
 
 function admissionYear(row: OutstandingRow) {
   return row.admission_date.slice(0, 4);
@@ -202,6 +218,63 @@ export function Outstanding({
     [admissionYearValue, canShowTable, courseId, rows],
   );
 
+  const yearLabels = useMemo(
+    () =>
+      courseYears.map((year) => ({ year, label: formatCourseYear(year) })),
+    [courseYears],
+  );
+  const printRows = useMemo<OutstandingPrintRow[]>(
+    () =>
+      visibleRows.map((row) => {
+        const studentCurrentYear = getCurrentCourseYear(row);
+        return {
+          id: row.id,
+          form_no: row.form_no,
+          student_name: row.student_name,
+          current_period: row.current_period,
+          cells: courseYears.map((year) => ({
+            year,
+            pending:
+              year > studentCurrentYear ? null : yearBreakdown(row, year).pending,
+          })),
+          pending: row.pending,
+        };
+      }),
+    [courseYears, visibleRows],
+  );
+  const [printToken, setPrintToken] = useState(0);
+  const printAfterRenderRef = useRef(false);
+
+  function handlePrint() {
+    if (printRows.length === 0) {
+      toast.error("Nothing to print");
+      return;
+    }
+    printAfterRenderRef.current = true;
+    setPrintToken((token) => token + 1);
+  }
+
+  // Wait for the populated report (and its logo) to paint, then open the print
+  // dialog. The browser/webview prints whatever is in #outstanding-print.
+  useEffect(() => {
+    if (!printAfterRenderRef.current) return;
+    printAfterRenderRef.current = false;
+    const img = document.querySelector<HTMLImageElement>(
+      "#outstanding-print img",
+    );
+    if (img && !img.complete) {
+      const done = () => {
+        img.removeEventListener("load", done);
+        img.removeEventListener("error", done);
+        void printPage();
+      };
+      img.addEventListener("load", done);
+      img.addEventListener("error", done);
+      return;
+    }
+    requestAnimationFrame(() => void printPage());
+  }, [printToken]);
+
   useEffect(() => {
     async function loadOutstanding() {
       try {
@@ -334,6 +407,24 @@ export function Outstanding({
       </Card>
 
       <Card className="p-0">
+        {canShowTable && visibleRows.length > 0 && (
+          <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+            <p className="text-sm text-muted-foreground">
+              {visibleRows.length}{" "}
+              {visibleRows.length === 1 ? "student" : "students"} with
+              outstanding fees
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handlePrint}
+            >
+              <Printer className="size-4" />
+              Print
+            </Button>
+          </div>
+        )}
         <CardContent className="p-0">
           {!canShowTable ? (
             <p className="p-6 text-center text-sm text-muted-foreground">
@@ -420,6 +511,15 @@ export function Outstanding({
           )}
         </CardContent>
       </Card>
+
+      <OutstandingPrint
+        course={selectedCourse}
+        branchName={selectedBranch?.name}
+        admissionYear={admissionYearValue}
+        date={displayDate(today())}
+        yearLabels={yearLabels}
+        rows={printRows}
+      />
     </div>
   );
 }
