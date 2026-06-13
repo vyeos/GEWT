@@ -2138,6 +2138,9 @@ pub async fn create_receipt(
     if !["Tuition", "Other"].contains(&req.fee_type.as_str()) {
         return Err("Invalid fee type".to_string());
     }
+    if !["Cash", "UPI", "DD", "Cheque", "NEFT", "RTGS"].contains(&req.payment_mode.as_str()) {
+        return Err("Invalid payment mode".to_string());
+    }
     // Trim the reference so a whitespace-only entry doesn't satisfy the
     // non-cash requirement (or get stored).
     let reference_no = req

@@ -835,12 +835,25 @@ pub fn run() {
 #[cfg(test)]
 mod smoke_tests {
     use crate::backup;
-    use crate::db::{self, CourseRequest, PromoteRequest, ReceiptRequest, StudentRequest};
+    use crate::db::{
+        self, Branch, Course, CourseRequest, OutstandingRow, PromoteRequest, Receipt,
+        ReceiptRequest, Student, StudentRequest,
+    };
+    use sqlx::SqlitePool;
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
 
     const PRT: &str = "11111111-1111-1111-1111-111111111111";
     const HMT: &str = "22222222-2222-2222-2222-222222222222";
     const TLD: &str = "33333333-3333-3333-3333-333333333333";
     const ADMIN: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+
+    async fn test_pool() -> Result<(PathBuf, SqlitePool), String> {
+        let tmp = std::env::temp_dir().join(format!("gewt-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let pool = db::init_db(&tmp).await?;
+        Ok((tmp, pool))
+    }
 
     fn student_req(branch: &str, course: &str, date: &str, fee: f64) -> StudentRequest {
         StudentRequest {
@@ -888,10 +901,1051 @@ mod smoke_tests {
         }
     }
 
+    async fn receipt_validation_and_fee_breakdown_run() -> Result<(), String> {
+        let (_tmp, pool) = test_pool().await?;
+        let mut course_req = course_req(PRT, "Receipt Validation");
+        course_req.duration = 1;
+        let course = db::create_course(&pool, course_req).await?;
+        let mut req = student_req(PRT, &course.id, "2026-09-01", 1200.0);
+        req.tuition_fee_year_1 = Some(1000.0);
+        req.other_fee_year_1 = Some(200.0);
+        let student = db::create_student(&pool, req, ADMIN).await?;
+
+        let missing_ref = db::create_receipt(
+            &pool,
+            ReceiptRequest {
+                student_id: student.id.clone(),
+                receipt_date: "2026-09-02".into(),
+                fee_type: "Other".into(),
+                amount_paid: 100.0,
+                payment_mode: "UPI".into(),
+                reference_no: Some("   ".into()),
+            },
+            PRT,
+            ADMIN,
+        )
+        .await;
+        assert!(
+            missing_ref.is_err(),
+            "non-cash receipts require a non-blank reference"
+        );
+
+        let invalid_mode = db::create_receipt(
+            &pool,
+            ReceiptRequest {
+                student_id: student.id.clone(),
+                receipt_date: "2026-09-02".into(),
+                fee_type: "Other".into(),
+                amount_paid: 100.0,
+                payment_mode: "Card".into(),
+                reference_no: Some("CARD-1".into()),
+            },
+            PRT,
+            ADMIN,
+        )
+        .await;
+        assert!(
+            invalid_mode.is_err(),
+            "unsupported payment modes are rejected"
+        );
+
+        let other = db::create_receipt(
+            &pool,
+            ReceiptRequest {
+                student_id: student.id.clone(),
+                receipt_date: "2026-09-02".into(),
+                fee_type: "Other".into(),
+                amount_paid: 100.0,
+                payment_mode: "UPI".into(),
+                reference_no: Some(" UPI-123 ".into()),
+            },
+            PRT,
+            ADMIN,
+        )
+        .await?;
+        assert_eq!(
+            other.reference_no.as_deref(),
+            Some("UPI-123"),
+            "stored references are trimmed"
+        );
+
+        let overpay_other = db::create_receipt(
+            &pool,
+            ReceiptRequest {
+                student_id: student.id.clone(),
+                receipt_date: "2026-09-03".into(),
+                fee_type: "Other".into(),
+                amount_paid: 1.0,
+                payment_mode: "Cash".into(),
+                reference_no: None,
+            },
+            PRT,
+            ADMIN,
+        )
+        .await;
+        assert!(
+            overpay_other.is_err(),
+            "other-fee overpayment is rejected independently"
+        );
+
+        db::create_receipt(
+            &pool,
+            ReceiptRequest {
+                student_id: student.id.clone(),
+                receipt_date: "2026-09-04".into(),
+                fee_type: "Tuition".into(),
+                amount_paid: 500.0,
+                payment_mode: "Cash".into(),
+                reference_no: None,
+            },
+            PRT,
+            ADMIN,
+        )
+        .await?;
+        assert!(
+            !db::outstanding(&pool, Some(PRT))
+                .await?
+                .iter()
+                .any(|row| row.student.id == student.id),
+            "fully paid current period disappears from outstanding"
+        );
+
+        Ok(())
+    }
+
+    async fn student_fee_split_validation_run() -> Result<(), String> {
+        let (_tmp, pool) = test_pool().await?;
+        let course = db::create_course(&pool, course_req(PRT, "Fee Split")).await?;
+
+        let mut mismatch = student_req(PRT, &course.id, "2026-09-01", 1000.0);
+        mismatch.tuition_fee_year_1 = Some(700.0);
+        mismatch.other_fee_year_1 = Some(200.0);
+        assert!(
+            db::create_student(&pool, mismatch, ADMIN).await.is_err(),
+            "tuition and other fees must add up to the yearly fee"
+        );
+
+        let negative = student_req(PRT, &course.id, "2026-09-01", -1.0);
+        assert!(
+            db::create_student(&pool, negative, ADMIN).await.is_err(),
+            "negative fees are rejected"
+        );
+
+        let mut valid = student_req(PRT, &course.id, "2026-09-01", 1000.0);
+        valid.tuition_fee_year_1 = Some(750.0);
+        valid.other_fee_year_1 = Some(250.0);
+        let student = db::create_student(&pool, valid, ADMIN).await?;
+        assert_eq!(student.tuition_fee_year_1, 750.0);
+        assert_eq!(student.other_fee_year_1, 250.0);
+
+        Ok(())
+    }
+
+    async fn promotion_deduplicates_and_stops_at_course_end_run() -> Result<(), String> {
+        let (_tmp, pool) = test_pool().await?;
+        let mut course_req = course_req(PRT, "One Year");
+        course_req.duration = 1;
+        let course = db::create_course(&pool, course_req).await?;
+        let student = db::create_student(
+            &pool,
+            student_req(PRT, &course.id, "2026-09-01", 1000.0),
+            ADMIN,
+        )
+        .await?;
+
+        let first = db::promote_students(
+            &pool,
+            PromoteRequest {
+                course_id: course.id.clone(),
+                admission_year: 2026,
+                student_ids: vec![student.id.clone(), student.id.clone()],
+            },
+        )
+        .await?;
+        assert_eq!(first.promoted_count, 1, "duplicate ids are promoted once");
+        assert_eq!(
+            first.skipped_count, 0,
+            "duplicates are not counted as skips"
+        );
+        assert_eq!(first.students[0].current_course_period, 2);
+
+        let second = db::promote_students(
+            &pool,
+            PromoteRequest {
+                course_id: course.id.clone(),
+                admission_year: 2026,
+                student_ids: vec![student.id.clone()],
+            },
+        )
+        .await?;
+        assert_eq!(second.promoted_count, 0);
+        assert_eq!(
+            second.skipped_count, 1,
+            "students at final period are skipped"
+        );
+        assert_eq!(second.students[0].current_course_period, 2);
+
+        Ok(())
+    }
+
+    async fn academic_year_settings_affect_numbering_run() -> Result<(), String> {
+        let (_tmp, pool) = test_pool().await?;
+        let before = db::preview_number(&pool, PRT, "form", "2026-06-01").await?;
+        assert_eq!(before, "PRJ-1-2025");
+
+        db::update_settings(
+            &pool,
+            db::SettingsRequest {
+                academic_year_start_month: 6,
+            },
+        )
+        .await?;
+        let after = db::preview_number(&pool, PRT, "form", "2026-06-01").await?;
+        assert_eq!(after, "PRJ-1-2026");
+
+        let invalid = db::update_settings(
+            &pool,
+            db::SettingsRequest {
+                academic_year_start_month: 13,
+            },
+        )
+        .await;
+        assert!(invalid.is_err(), "invalid start months are rejected");
+
+        Ok(())
+    }
+
+    async fn cancelled_admission_is_hidden_and_zeroed_run() -> Result<(), String> {
+        let (_tmp, pool) = test_pool().await?;
+        let course = db::create_course(&pool, course_req(PRT, "Cancel Me")).await?;
+        let student = db::create_student(
+            &pool,
+            student_req(PRT, &course.id, "2026-09-01", 1000.0),
+            ADMIN,
+        )
+        .await?;
+
+        let cancelled = db::cancel_student(&pool, &student.id, ADMIN).await?;
+        assert!(cancelled.admission_cancelled);
+        assert_eq!(cancelled.fee_year_1, 0.0);
+        assert_eq!(cancelled.tuition_fee_year_1, 0.0);
+
+        let active = db::list_students(&pool, Some(PRT), false).await?;
+        assert!(
+            !active.iter().any(|s| s.id == student.id),
+            "cancelled students are hidden from active student lists"
+        );
+        let with_cancelled = db::list_students(&pool, Some(PRT), true).await?;
+        assert!(
+            with_cancelled.iter().any(|s| s.id == student.id),
+            "cancelled students remain available for admin review"
+        );
+        assert!(
+            !db::outstanding(&pool, Some(PRT))
+                .await?
+                .iter()
+                .any(|row| row.student.id == student.id),
+            "cancelled admissions do not appear as outstanding"
+        );
+
+        Ok(())
+    }
+
+    async fn course_branch_moves_respect_enrollment_run() -> Result<(), String> {
+        let (_tmp, pool) = test_pool().await?;
+        let empty = db::create_course(&pool, course_req(PRT, "Movable")).await?;
+        let moved = db::update_course(&pool, &empty.id, course_req(HMT, "Movable")).await?;
+        assert_eq!(moved.branch_id, HMT, "empty courses can move branches");
+
+        let enrolled = db::create_course(&pool, course_req(PRT, "Anchored")).await?;
+        db::create_student(
+            &pool,
+            student_req(PRT, &enrolled.id, "2026-09-01", 1000.0),
+            ADMIN,
+        )
+        .await?;
+        let moved_enrolled =
+            db::update_course(&pool, &enrolled.id, course_req(HMT, "Anchored")).await;
+        assert!(
+            moved_enrolled.is_err(),
+            "courses with admitted students cannot move branches"
+        );
+
+        Ok(())
+    }
+
+    #[derive(Clone)]
+    struct FlowStudent {
+        id: String,
+        course_id: String,
+        slot: usize,
+    }
+
+    fn total_years(course: &Course) -> i64 {
+        if course.duration_type == "semester" {
+            (course.duration + 1) / 2
+        } else {
+            course.duration
+        }
+    }
+
+    fn total_periods(course: &Course) -> i64 {
+        if course.duration_type == "semester" {
+            course.duration
+        } else {
+            total_years(course) * 2
+        }
+    }
+
+    fn course_year_from_period(period: i64) -> usize {
+        ((period + 1) / 2).clamp(1, 4) as usize
+    }
+
+    fn annual_fee(course_index: usize, student_slot: usize, year: usize) -> f64 {
+        12_000.0
+            + (course_index as f64 * 200.0)
+            + (student_slot as f64 * 20.0)
+            + ((year.saturating_sub(1)) as f64 * 2_000.0)
+    }
+
+    fn student_request_for_course(
+        course: &Course,
+        course_index: usize,
+        student_slot: usize,
+        name: String,
+    ) -> StudentRequest {
+        let years = total_years(course) as usize;
+        let fees = [
+            if years >= 1 {
+                annual_fee(course_index, student_slot, 1)
+            } else {
+                0.0
+            },
+            if years >= 2 {
+                annual_fee(course_index, student_slot, 2)
+            } else {
+                0.0
+            },
+            if years >= 3 {
+                annual_fee(course_index, student_slot, 3)
+            } else {
+                0.0
+            },
+            if years >= 4 {
+                annual_fee(course_index, student_slot, 4)
+            } else {
+                0.0
+            },
+        ];
+
+        StudentRequest {
+            admission_date: "2026-09-01".into(),
+            branch_id: course.branch_id.clone(),
+            course_id: course.id.clone(),
+            student_name: name,
+            surname: format!("Flow{course_index:02}"),
+            father_name: format!("Parent{student_slot}"),
+            category: "General".into(),
+            religion: "Hindu".into(),
+            caste: "General".into(),
+            gender: if student_slot == 1 { "Female" } else { "Male" }.into(),
+            aadhar: format!("9000000000{course_index:02}{student_slot}"),
+            address: "Regression Test Address".into(),
+            district: "Sabarkantha".into(),
+            taluka: "Test Taluka".into(),
+            pincode: "383205".into(),
+            student_phone: format!("900000{course_index:03}{student_slot}"),
+            parent_phone: format!("910000{course_index:03}{student_slot}"),
+            photo: String::new(),
+            fee_year_1: fees[0],
+            fee_year_2: fees[1],
+            fee_year_3: fees[2],
+            fee_year_4: fees[3],
+            tuition_fee_year_1: Some(fees[0]),
+            tuition_fee_year_2: Some(fees[1]),
+            tuition_fee_year_3: Some(fees[2]),
+            tuition_fee_year_4: Some(fees[3]),
+            other_fee_year_1: Some(0.0),
+            other_fee_year_2: Some(0.0),
+            other_fee_year_3: Some(0.0),
+            other_fee_year_4: Some(0.0),
+            current_course_period: None,
+        }
+    }
+
+    fn student_to_request(student: &Student) -> StudentRequest {
+        StudentRequest {
+            admission_date: student.admission_date.clone(),
+            branch_id: student.branch_id.clone(),
+            course_id: student.course_id.clone(),
+            student_name: student.student_name.clone(),
+            surname: student.surname.clone(),
+            father_name: student.father_name.clone(),
+            category: student.category.clone(),
+            religion: student.religion.clone(),
+            caste: student.caste.clone(),
+            gender: student.gender.clone(),
+            aadhar: student.aadhar.clone(),
+            address: student.address.clone(),
+            district: student.district.clone(),
+            taluka: student.taluka.clone(),
+            pincode: student.pincode.clone(),
+            student_phone: student.student_phone.clone(),
+            parent_phone: student.parent_phone.clone(),
+            photo: student.photo.clone(),
+            fee_year_1: student.fee_year_1,
+            fee_year_2: student.fee_year_2,
+            fee_year_3: student.fee_year_3,
+            fee_year_4: student.fee_year_4,
+            tuition_fee_year_1: Some(student.tuition_fee_year_1),
+            tuition_fee_year_2: Some(student.tuition_fee_year_2),
+            tuition_fee_year_3: Some(student.tuition_fee_year_3),
+            tuition_fee_year_4: Some(student.tuition_fee_year_4),
+            other_fee_year_1: Some(student.other_fee_year_1),
+            other_fee_year_2: Some(student.other_fee_year_2),
+            other_fee_year_3: Some(student.other_fee_year_3),
+            other_fee_year_4: Some(student.other_fee_year_4),
+            current_course_period: Some(student.current_course_period),
+        }
+    }
+
+    fn set_year_fee(req: &mut StudentRequest, year: usize, fee: f64) {
+        match year {
+            1 => {
+                req.fee_year_1 = fee;
+                req.tuition_fee_year_1 = Some(fee);
+                req.other_fee_year_1 = Some(0.0);
+            }
+            2 => {
+                req.fee_year_2 = fee;
+                req.tuition_fee_year_2 = Some(fee);
+                req.other_fee_year_2 = Some(0.0);
+            }
+            3 => {
+                req.fee_year_3 = fee;
+                req.tuition_fee_year_3 = Some(fee);
+                req.other_fee_year_3 = Some(0.0);
+            }
+            4 => {
+                req.fee_year_4 = fee;
+                req.tuition_fee_year_4 = Some(fee);
+                req.other_fee_year_4 = Some(0.0);
+            }
+            _ => {}
+        }
+    }
+
+    fn downloads_artifact_dir() -> Result<PathBuf, String> {
+        let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+        Ok(PathBuf::from(home)
+            .join("Downloads")
+            .join(format!("GEWT-elaborate-flow-{stamp}")))
+    }
+
+    fn sanitize_file_part(value: &str) -> String {
+        let mut out = String::new();
+        for ch in value.chars() {
+            if ch.is_ascii_alphanumeric() {
+                out.push(ch);
+            } else if matches!(ch, '-' | '_' | '.') {
+                out.push(ch);
+            } else if ch.is_whitespace() {
+                out.push('-');
+            }
+        }
+        if out.is_empty() {
+            "untitled".to_string()
+        } else {
+            out
+        }
+    }
+
+    fn escape_html(value: &str) -> String {
+        value
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&#39;")
+    }
+
+    fn write_file(path: &Path, content: &str) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(path, content).map_err(|e| e.to_string())
+    }
+
+    fn admission_form_html(student: &Student, course: &Course, branch: &Branch) -> String {
+        format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>Admission {form}</title>\
+             <style>body{{font-family:Arial,sans-serif;margin:32px;}}table{{border-collapse:collapse;width:100%;}}td,th{{border:1px solid #444;padding:6px;text-align:left;}}</style>\
+             </head><body><h1>Admission Form</h1><table>\
+             <tr><th>Form No</th><td>{form}</td></tr>\
+             <tr><th>Date</th><td>{date}</td></tr>\
+             <tr><th>Branch</th><td>{branch}</td></tr>\
+             <tr><th>Course</th><td>{course}</td></tr>\
+             <tr><th>Name</th><td>{surname} {name} {father}</td></tr>\
+             <tr><th>Category / Gender</th><td>{category} / {gender}</td></tr>\
+             <tr><th>Address</th><td>{address}, {taluka}, {district} {pincode}</td></tr>\
+             <tr><th>Student Phone</th><td>{student_phone}</td></tr>\
+             <tr><th>Parent Phone</th><td>{parent_phone}</td></tr>\
+             <tr><th>Fees</th><td>Y1 {y1:.0}, Y2 {y2:.0}, Y3 {y3:.0}, Y4 {y4:.0}</td></tr>\
+             </table></body></html>",
+            form = escape_html(&student.form_no),
+            date = escape_html(&student.admission_date),
+            branch = escape_html(&branch.name),
+            course = escape_html(&course.name),
+            surname = escape_html(&student.surname),
+            name = escape_html(&student.student_name),
+            father = escape_html(&student.father_name),
+            category = escape_html(&student.category),
+            gender = escape_html(&student.gender),
+            address = escape_html(&student.address),
+            taluka = escape_html(&student.taluka),
+            district = escape_html(&student.district),
+            pincode = escape_html(&student.pincode),
+            student_phone = escape_html(&student.student_phone),
+            parent_phone = escape_html(&student.parent_phone),
+            y1 = student.fee_year_1,
+            y2 = student.fee_year_2,
+            y3 = student.fee_year_3,
+            y4 = student.fee_year_4,
+        )
+    }
+
+    fn receipt_register_html(title: &str, rows: &[(Receipt, Student)]) -> String {
+        let mut body = String::from(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><style>\
+             body{font-family:Arial,sans-serif;margin:32px;}table{border-collapse:collapse;width:100%;}\
+             td,th{border:1px solid #444;padding:6px;text-align:left;}td.num{text-align:right;}\
+             </style></head><body>",
+        );
+        body.push_str(&format!("<h1>{}</h1><table><thead><tr><th>Receipt No</th><th>Date</th><th>Student</th><th>Form</th><th>Course</th><th>Fee Type</th><th>Mode</th><th>Amount</th></tr></thead><tbody>", escape_html(title)));
+        for (receipt, student) in rows {
+            body.push_str(&format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"num\">{:.0}</td></tr>",
+                escape_html(&receipt.receipt_no),
+                escape_html(&receipt.receipt_date),
+                escape_html(&student.student_name),
+                escape_html(&student.form_no),
+                escape_html(&student.course_name),
+                escape_html(&receipt.fee_type),
+                escape_html(&receipt.payment_mode),
+                receipt.amount_paid,
+            ));
+        }
+        body.push_str("</tbody></table></body></html>");
+        body
+    }
+
+    fn csv_escape(value: &str) -> String {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    }
+
+    fn save_outstanding_snapshot(
+        artifact_dir: &Path,
+        file_name: &str,
+        rows: &[OutstandingRow],
+    ) -> Result<(), String> {
+        let mut csv = String::from(
+            "form_no,student_name,branch,course,current_period,total_due,total_paid,pending,last_receipt_no,year1_pending,year2_pending,year3_pending,year4_pending\n",
+        );
+        for row in rows {
+            let mut year_pending = [0.0; 4];
+            for breakdown in &row.year_breakdown {
+                if (1..=4).contains(&breakdown.year) {
+                    year_pending[(breakdown.year - 1) as usize] = breakdown.pending;
+                }
+            }
+            csv.push_str(&format!(
+                "{},{},{},{},{},{:.0},{:.0},{:.0},{},{:.0},{:.0},{:.0},{:.0}\n",
+                csv_escape(&row.student.form_no),
+                csv_escape(&row.student.student_name),
+                csv_escape(&row.student.branch_name),
+                csv_escape(&row.student.course_name),
+                csv_escape(&row.current_period),
+                row.total_due,
+                row.total_paid,
+                row.pending,
+                csv_escape(row.last_receipt_no.as_deref().unwrap_or("")),
+                year_pending[0],
+                year_pending[1],
+                year_pending[2],
+                year_pending[3],
+            ));
+        }
+        write_file(&artifact_dir.join("outstanding").join(file_name), &csv)
+    }
+
+    async fn outstanding_rows_for_students(
+        pool: &SqlitePool,
+        student_ids: &[String],
+    ) -> Result<Vec<OutstandingRow>, String> {
+        let id_set: std::collections::HashSet<&str> =
+            student_ids.iter().map(String::as_str).collect();
+        Ok(db::outstanding(pool, None)
+            .await?
+            .into_iter()
+            .filter(|row| id_set.contains(row.student.id.as_str()))
+            .collect())
+    }
+
+    async fn pending_for_student(pool: &SqlitePool, student_id: &str) -> Result<f64, String> {
+        Ok(db::outstanding(pool, None)
+            .await?
+            .into_iter()
+            .find(|row| row.student.id == student_id)
+            .map(|row| row.pending)
+            .unwrap_or(0.0))
+    }
+
+    async fn promote_course_students(
+        pool: &SqlitePool,
+        course: &Course,
+        flow_students: &[FlowStudent],
+    ) -> Result<db::PromoteResponse, String> {
+        let ids = flow_students
+            .iter()
+            .filter(|student| student.course_id == course.id)
+            .map(|student| student.id.clone())
+            .collect::<Vec<_>>();
+        db::promote_students(
+            pool,
+            PromoteRequest {
+                course_id: course.id.clone(),
+                admission_year: 2026,
+                student_ids: ids,
+            },
+        )
+        .await
+    }
+
+    async fn save_pending_receipts(
+        pool: &SqlitePool,
+        artifact_dir: &Path,
+        stage: &str,
+        date: &str,
+        students: &[FlowStudent],
+    ) -> Result<Vec<(Receipt, Student)>, String> {
+        let mut rows = Vec::new();
+        for flow_student in students {
+            let pending = pending_for_student(pool, &flow_student.id).await?;
+            if pending <= 0.0 {
+                continue;
+            }
+            let student = db::load_student(pool, &flow_student.id).await?;
+            let receipt = db::create_receipt(
+                pool,
+                ReceiptRequest {
+                    student_id: student.id.clone(),
+                    receipt_date: date.into(),
+                    fee_type: "Tuition".into(),
+                    amount_paid: pending,
+                    payment_mode: "Cash".into(),
+                    reference_no: None,
+                },
+                &student.branch_id,
+                ADMIN,
+            )
+            .await?;
+            rows.push((receipt, student));
+        }
+
+        let html = receipt_register_html(stage, &rows);
+        write_file(
+            &artifact_dir
+                .join("receipts")
+                .join(format!("{}.html", sanitize_file_part(stage))),
+            &html,
+        )?;
+        Ok(rows)
+    }
+
+    async fn elaborate_fee_office_flow_run() -> Result<PathBuf, String> {
+        let (_tmp, pool) = test_pool().await?;
+        let artifact_dir = downloads_artifact_dir()?;
+        let admission_dir = artifact_dir.join("admission-forms");
+        std::fs::create_dir_all(&admission_dir).map_err(|e| e.to_string())?;
+
+        let branches = db::list_branches(&pool, None).await?;
+        let branches_by_id: HashMap<String, Branch> = branches
+            .into_iter()
+            .map(|branch| (branch.id.clone(), branch))
+            .collect();
+        let courses = db::list_courses(&pool, None, false).await?;
+        assert_eq!(courses.len(), 18, "seeded active course catalog changed");
+
+        let courses_by_id: HashMap<String, Course> = courses
+            .iter()
+            .cloned()
+            .map(|course| (course.id.clone(), course))
+            .collect();
+        let mut flow_students = Vec::new();
+        let mut manifest = String::from(
+            "GEWT elaborate fee-office regression flow\n\nThis bundle is generated by the ignored Rust test `elaborate_fee_office_flow_with_saved_artifacts`.\n\n",
+        );
+
+        for (course_index, course) in courses.iter().enumerate() {
+            let branch = branches_by_id
+                .get(&course.branch_id)
+                .ok_or_else(|| "Branch missing for course".to_string())?;
+            for student_slot in 1..=2 {
+                let req = student_request_for_course(
+                    course,
+                    course_index,
+                    student_slot,
+                    format!(
+                        "Flow Student {} {}",
+                        sanitize_file_part(&course.name),
+                        student_slot
+                    ),
+                );
+                let student = db::create_student(&pool, req, ADMIN).await?;
+                let file_name = format!(
+                    "{}-{}-{}.html",
+                    sanitize_file_part(&branch.code),
+                    sanitize_file_part(&course.name),
+                    sanitize_file_part(&student.form_no)
+                );
+                write_file(
+                    &admission_dir.join(file_name),
+                    &admission_form_html(&student, course, branch),
+                )?;
+                flow_students.push(FlowStudent {
+                    id: student.id,
+                    course_id: course.id.clone(),
+                    slot: student_slot,
+                });
+            }
+        }
+        let student_ids = flow_students
+            .iter()
+            .map(|student| student.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            flow_students.len(),
+            courses.len() * 2,
+            "two students should be admitted in every active course"
+        );
+
+        let after_admission = outstanding_rows_for_students(&pool, &student_ids).await?;
+        assert_eq!(
+            after_admission.len(),
+            flow_students.len(),
+            "new admissions should owe the first term/semester"
+        );
+        save_outstanding_snapshot(
+            &artifact_dir,
+            "00-after-admission-before-receipts.csv",
+            &after_admission,
+        )?;
+
+        let period1_receipts = save_pending_receipts(
+            &pool,
+            &artifact_dir,
+            "01 period 1 receipts after admission",
+            "2026-09-05",
+            &flow_students,
+        )
+        .await?;
+        assert_eq!(
+            period1_receipts.len(),
+            flow_students.len(),
+            "every admitted student should receive a period 1 receipt"
+        );
+        let after_period1 = outstanding_rows_for_students(&pool, &student_ids).await?;
+        assert!(
+            after_period1.is_empty(),
+            "period 1 receipts should clear first-period outstanding"
+        );
+        save_outstanding_snapshot(
+            &artifact_dir,
+            "02-after-period-1-receipts.csv",
+            &after_period1,
+        )?;
+
+        for course in &courses {
+            let response = promote_course_students(&pool, course, &flow_students).await?;
+            assert_eq!(
+                response.promoted_count, 2,
+                "all courses should reach period 2"
+            );
+            assert_eq!(response.skipped_count, 0);
+        }
+
+        let period2_receipts = save_pending_receipts(
+            &pool,
+            &artifact_dir,
+            "03 period 2 receipts completing year 1",
+            "2027-02-05",
+            &flow_students,
+        )
+        .await?;
+        assert_eq!(
+            period2_receipts.len(),
+            flow_students.len(),
+            "every student should receive the second receipt for year 1"
+        );
+        let after_year1 = outstanding_rows_for_students(&pool, &student_ids).await?;
+        assert!(
+            after_year1.is_empty(),
+            "two receipts should fully clear year 1"
+        );
+        save_outstanding_snapshot(
+            &artifact_dir,
+            "04-after-year-1-two-receipts.csv",
+            &after_year1,
+        )?;
+
+        for course in &courses {
+            let response = promote_course_students(&pool, course, &flow_students).await?;
+            if total_periods(course) > 2 {
+                assert_eq!(
+                    response.promoted_count, 2,
+                    "eligible courses should reach period 3"
+                );
+                assert_eq!(response.skipped_count, 0);
+            } else {
+                assert_eq!(
+                    response.promoted_count, 0,
+                    "one-year courses should not promote past period 2"
+                );
+                assert_eq!(response.skipped_count, 2);
+            }
+        }
+
+        let mut fee_change_log =
+            String::from("stage,form_no,course,period,attempt,result,stored_fee\n");
+        let period3_students = flow_students
+            .iter()
+            .filter(|student| {
+                courses_by_id
+                    .get(&student.course_id)
+                    .map(|course| total_periods(course) > 2)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for flow_student in period3_students.iter().filter(|student| student.slot == 1) {
+            let student = db::load_student(&pool, &flow_student.id).await?;
+            let current_year = course_year_from_period(student.current_course_period);
+            assert_eq!(current_year, 2, "period 3 should be year 2");
+
+            let mut locked_req = student_to_request(&student);
+            set_year_fee(&mut locked_req, 1, student.fee_year_1 + 500.0);
+            let locked = db::update_student(&pool, &student.id, locked_req).await;
+            assert!(
+                locked.is_err(),
+                "completed year 1 fee should be locked after promotion to period 3"
+            );
+
+            let mut editable_req = student_to_request(&student);
+            let new_fee = student.fee_year_2 + 2_000.0;
+            set_year_fee(&mut editable_req, 2, new_fee);
+            let updated = db::update_student(&pool, &student.id, editable_req).await?;
+            assert_eq!(
+                updated.fee_year_2, new_fee,
+                "current year fee should be editable"
+            );
+            fee_change_log.push_str(&format!(
+                "{},{},{},{},year1 locked and year2 changed,worked,{:.0}\n",
+                csv_escape("05 after promotion to period 3"),
+                csv_escape(&updated.form_no),
+                csv_escape(&updated.course_name),
+                updated.current_course_period,
+                updated.fee_year_2
+            ));
+        }
+        let after_period3_fee_change = outstanding_rows_for_students(&pool, &student_ids).await?;
+        assert!(
+            !after_period3_fee_change.is_empty(),
+            "year 2 fee edits should create current-period outstanding"
+        );
+        save_outstanding_snapshot(
+            &artifact_dir,
+            "05-after-year-2-fee-change-before-period-3-receipts.csv",
+            &after_period3_fee_change,
+        )?;
+
+        let period3_receipts = save_pending_receipts(
+            &pool,
+            &artifact_dir,
+            "06 period 3 receipts after year 2 fee change",
+            "2027-09-05",
+            &period3_students,
+        )
+        .await?;
+        assert_eq!(
+            period3_receipts.len(),
+            period3_students.len(),
+            "all period 3 students should receive a receipt"
+        );
+        let after_period3_receipts = outstanding_rows_for_students(&pool, &student_ids).await?;
+        assert!(
+            after_period3_receipts.is_empty(),
+            "period 3 receipts should clear outstanding"
+        );
+        save_outstanding_snapshot(
+            &artifact_dir,
+            "07-after-period-3-receipts.csv",
+            &after_period3_receipts,
+        )?;
+
+        let period4_students = flow_students
+            .iter()
+            .filter(|student| {
+                courses_by_id
+                    .get(&student.course_id)
+                    .map(|course| total_periods(course) > 3)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for flow_student in period4_students.iter().filter(|student| student.slot == 2) {
+            let student = db::load_student(&pool, &flow_student.id).await?;
+            let mut req = student_to_request(&student);
+            let new_fee = student.fee_year_2 + 3_000.0;
+            set_year_fee(&mut req, 2, new_fee);
+            let updated = db::update_student(&pool, &student.id, req).await?;
+            assert_eq!(
+                updated.fee_year_2, new_fee,
+                "second current-year fee change should persist"
+            );
+            fee_change_log.push_str(&format!(
+                "{},{},{},{},year2 changed again before period4,worked,{:.0}\n",
+                csv_escape("08 before promotion to period 4"),
+                csv_escape(&updated.form_no),
+                csv_escape(&updated.course_name),
+                updated.current_course_period,
+                updated.fee_year_2
+            ));
+        }
+        let after_second_fee_change = outstanding_rows_for_students(&pool, &student_ids).await?;
+        save_outstanding_snapshot(
+            &artifact_dir,
+            "08-after-second-year-2-fee-change.csv",
+            &after_second_fee_change,
+        )?;
+
+        for course in courses.iter().filter(|course| total_periods(course) > 3) {
+            let response = promote_course_students(&pool, course, &flow_students).await?;
+            assert_eq!(
+                response.promoted_count, 2,
+                "eligible courses should reach period 4"
+            );
+            assert_eq!(response.skipped_count, 0);
+        }
+        let period4_receipts = save_pending_receipts(
+            &pool,
+            &artifact_dir,
+            "09 period 4 receipts completing year 2",
+            "2028-02-05",
+            &period4_students,
+        )
+        .await?;
+        assert_eq!(
+            period4_receipts.len(),
+            period4_students.len(),
+            "all period 4 students should receive a receipt"
+        );
+        let after_year2 = outstanding_rows_for_students(&pool, &student_ids).await?;
+        assert!(
+            after_year2.is_empty(),
+            "period 3 and period 4 receipts should clear year 2"
+        );
+        save_outstanding_snapshot(
+            &artifact_dir,
+            "10-after-year-2-four-receipts.csv",
+            &after_year2,
+        )?;
+
+        let period5_students = flow_students
+            .iter()
+            .filter(|student| {
+                courses_by_id
+                    .get(&student.course_id)
+                    .map(|course| total_periods(course) > 4)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for course in courses.iter().filter(|course| total_periods(course) > 4) {
+            let response = promote_course_students(&pool, course, &flow_students).await?;
+            assert_eq!(
+                response.promoted_count, 2,
+                "eligible courses should reach period 5"
+            );
+            assert_eq!(response.skipped_count, 0);
+        }
+        for flow_student in period5_students.iter().filter(|student| student.slot == 1) {
+            let student = db::load_student(&pool, &flow_student.id).await?;
+            let mut locked_req = student_to_request(&student);
+            set_year_fee(&mut locked_req, 2, student.fee_year_2 + 500.0);
+            let locked = db::update_student(&pool, &student.id, locked_req).await;
+            assert!(
+                locked.is_err(),
+                "completed year 2 fee should lock after promotion to period 5"
+            );
+
+            let mut editable_req = student_to_request(&student);
+            let new_fee = student.fee_year_3 + 4_000.0;
+            set_year_fee(&mut editable_req, 3, new_fee);
+            let updated = db::update_student(&pool, &student.id, editable_req).await?;
+            assert_eq!(
+                updated.fee_year_3, new_fee,
+                "year 3 fee should remain editable at period 5"
+            );
+            fee_change_log.push_str(&format!(
+                "{},{},{},{},year2 locked and year3 changed,worked,{:.0}\n",
+                csv_escape("11 after promotion to period 5"),
+                csv_escape(&updated.form_no),
+                csv_escape(&updated.course_name),
+                updated.current_course_period,
+                updated.fee_year_3
+            ));
+        }
+        let after_year3_fee_change = outstanding_rows_for_students(&pool, &student_ids).await?;
+        save_outstanding_snapshot(
+            &artifact_dir,
+            "11-after-year-3-fee-change-before-receipts.csv",
+            &after_year3_fee_change,
+        )?;
+
+        write_file(
+            &artifact_dir.join("fee-change-checkpoints.csv"),
+            &fee_change_log,
+        )?;
+
+        manifest.push_str(&format!(
+            "Admitted students: {}\nActive courses covered: {}\nPeriod 1 receipts: {}\nPeriod 2 receipts: {}\nPeriod 3 receipts: {}\nPeriod 4 receipts: {}\n\n",
+            flow_students.len(),
+            courses.len(),
+            period1_receipts.len(),
+            period2_receipts.len(),
+            period3_receipts.len(),
+            period4_receipts.len(),
+        ));
+        manifest.push_str(
+            "Flow:\n\
+             1. Admit two students in every active seeded course and save each admission form.\n\
+             2. Save outstanding immediately after admission, before receipts.\n\
+             3. Record period 1 receipts and verify outstanding clears.\n\
+             4. Promote to period 2, record period 2 receipts, and save year-1 outstanding.\n\
+             5. Promote eligible courses to period 3; verify one-year courses stop at period 2.\n\
+             6. Verify year-1 fees are locked, change year-2 fees for selected students, and save outstanding.\n\
+             7. Record period 3 receipts and verify outstanding clears.\n\
+             8. Change year-2 fees again for selected students, promote to period 4, record receipts, and save year-2 outstanding.\n\
+             9. Promote longer courses to period 5; verify year-2 fees are locked while year-3 fees remain editable, then save outstanding.\n",
+        );
+        write_file(&artifact_dir.join("00-flow-manifest.txt"), &manifest)?;
+
+        Ok(artifact_dir)
+    }
+
     async fn run() -> Result<(), String> {
-        let tmp = std::env::temp_dir().join(format!("gewt-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let pool = db::init_db(&tmp).await?;
+        let (tmp, pool) = test_pool().await?;
 
         let prj_seed_courses = db::list_courses(&pool, Some(PRT), false).await?;
         let prj_seed_names: Vec<&str> = prj_seed_courses
@@ -1237,9 +2291,7 @@ mod smoke_tests {
     }
 
     async fn completed_year_fee_lock_run() -> Result<(), String> {
-        let tmp = std::env::temp_dir().join(format!("gewt-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let pool = db::init_db(&tmp).await?;
+        let (_tmp, pool) = test_pool().await?;
         let course = db::create_course(&pool, course_req(PRT, "Fee Lock")).await?;
         let student = db::create_student(
             &pool,
@@ -1271,8 +2323,7 @@ mod smoke_tests {
         let mut current_year_fee_req = student_req(PRT, &course.id, "2026-09-01", 1000.0);
         current_year_fee_req.current_course_period = Some(3);
         current_year_fee_req.fee_year_2 = 1200.0;
-        let current_year_fee =
-            db::update_student(&pool, &student.id, current_year_fee_req).await?;
+        let current_year_fee = db::update_student(&pool, &student.id, current_year_fee_req).await?;
         assert_eq!(
             current_year_fee.fee_year_2, 1200.0,
             "current year fee remains editable"
@@ -1285,6 +2336,53 @@ mod smoke_tests {
     fn completed_year_fee_lock() {
         tauri::async_runtime::block_on(completed_year_fee_lock_run())
             .expect("completed year fee lock test failed");
+    }
+
+    #[test]
+    fn receipt_validation_and_fee_breakdown() {
+        tauri::async_runtime::block_on(receipt_validation_and_fee_breakdown_run())
+            .expect("receipt validation and fee breakdown test failed");
+    }
+
+    #[test]
+    fn student_fee_split_validation() {
+        tauri::async_runtime::block_on(student_fee_split_validation_run())
+            .expect("student fee split validation test failed");
+    }
+
+    #[test]
+    fn promotion_deduplicates_and_stops_at_course_end() {
+        tauri::async_runtime::block_on(promotion_deduplicates_and_stops_at_course_end_run())
+            .expect("promotion limit test failed");
+    }
+
+    #[test]
+    fn academic_year_settings_affect_numbering() {
+        tauri::async_runtime::block_on(academic_year_settings_affect_numbering_run())
+            .expect("academic year settings test failed");
+    }
+
+    #[test]
+    fn cancelled_admission_is_hidden_and_zeroed() {
+        tauri::async_runtime::block_on(cancelled_admission_is_hidden_and_zeroed_run())
+            .expect("cancelled admission test failed");
+    }
+
+    #[test]
+    fn course_branch_moves_respect_enrollment() {
+        tauri::async_runtime::block_on(course_branch_moves_respect_enrollment_run())
+            .expect("course branch move test failed");
+    }
+
+    #[test]
+    #[ignore = "writes a full saved admission/receipt/outstanding artifact bundle to ~/Downloads"]
+    fn elaborate_fee_office_flow_with_saved_artifacts() {
+        let artifact_dir = tauri::async_runtime::block_on(elaborate_fee_office_flow_run())
+            .expect("elaborate fee office flow failed");
+        println!(
+            "Saved elaborate GEWT flow artifacts to {}",
+            artifact_dir.display()
+        );
     }
 
     #[test]
