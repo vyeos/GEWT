@@ -26,12 +26,19 @@ function getDuration(source: CourseDurationSource) {
 
 export function getCourseDuration(source: CourseDurationSource) {
   const duration = getDuration(source);
-  const totalSemesters =
-    duration.type === "semester" ? duration.value : duration.value * 2;
-  const totalYears =
+  // The backend only models 4 year-fee columns / 8 periods, so clamp here to
+  // keep the UI from showing years the backend will never bill (see
+  // total_course_years/total_course_periods in src-tauri/src/db.rs).
+  const totalSemesters = Math.min(
+    duration.type === "semester" ? duration.value : duration.value * 2,
+    8,
+  );
+  const totalYears = Math.min(
     duration.type === "semester"
       ? Math.ceil(duration.value / 2)
-      : duration.value;
+      : duration.value,
+    4,
+  );
 
   return {
     rawValue: duration.value,

@@ -39,6 +39,22 @@ describe("course duration helpers", () => {
     ]);
   });
 
+  it("caps totals at the 4-year / 8-semester ceiling the backend bills", () => {
+    // The backend rejects courses longer than this, but the helper must still
+    // never report more years/periods than the fee model supports, so the UI
+    // can't diverge from what outstanding() actually bills.
+    expect(getCourseDuration({ duration: 5, duration_type: "year" })).toMatchObject({
+      totalYears: 4,
+      totalSemesters: 8,
+      label: "5 years",
+    });
+    expect(getCourseDuration({ duration: 12, duration_type: "semester" })).toMatchObject({
+      totalYears: 4,
+      totalSemesters: 8,
+      label: "12 semesters",
+    });
+  });
+
   it("clamps current periods and derives the current course year", () => {
     expect(getCurrentCoursePeriod(makeStudent({ current_course_period: 0 }))).toBe(1);
     expect(getCurrentCoursePeriod(makeStudent({ current_course_period: 99 }))).toBe(6);

@@ -1205,6 +1205,17 @@ fn validate_course_request(req: &CourseRequest) -> DbResult<()> {
     if req.duration_type == "semester" && req.duration % 2 != 0 {
         return Err("Semester courses must have an even number of semesters".to_string());
     }
+    // The fee model only has four year columns (and the schema caps the current
+    // period at 8), so the rest of the system bills at most 4 years / 8
+    // semesters. Reject longer courses here rather than create one that can
+    // never bill its final years.
+    let max_duration = if req.duration_type == "semester" { 8 } else { 4 };
+    if req.duration > max_duration {
+        return Err(format!(
+            "Duration cannot exceed {max_duration} {}s",
+            req.duration_type
+        ));
+    }
     Ok(())
 }
 

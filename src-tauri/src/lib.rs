@@ -842,6 +842,7 @@ mod smoke_tests {
     use sqlx::SqlitePool;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
 
     const PRT: &str = "11111111-1111-1111-1111-111111111111";
     const HMT: &str = "22222222-2222-2222-2222-222222222222";
@@ -1174,11 +1175,209 @@ mod smoke_tests {
         Ok(())
     }
 
+    fn year_row(row: &OutstandingRow, year: i32) -> &db::OutstandingYearBreakdown {
+        row.year_breakdown
+            .iter()
+            .find(|y| y.year == year)
+            .unwrap_or_else(|| panic!("year {year} breakdown missing"))
+    }
+
+    async fn promote_to_period(
+        pool: &SqlitePool,
+        course: &Course,
+        student_id: &str,
+        target_period: i64,
+    ) -> Result<(), String> {
+        let current = db::load_student(pool, student_id).await?.current_course_period;
+        for _ in current..target_period {
+            db::promote_students(
+                pool,
+                PromoteRequest {
+                    course_id: course.id.clone(),
+                    admission_year: 2026,
+                    student_ids: vec![student_id.to_string()],
+                },
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    // Exercises allocate_fee_by_year / outstanding_year_breakdown: a partial
+    // payment must fill the earliest billed periods first, split tuition and
+    // other fees independently, and roll up into the right per-year totals.
+    async fn outstanding_partial_payment_allocation_run() -> Result<(), String> {
+        let (_tmp, pool) = test_pool().await?;
+        let mut req = course_req(PRT, "Partial Pay");
+        req.duration = 2;
+        req.duration_type = "year".into();
+        let course = db::create_course(&pool, req).await?;
+
+        // Year 1: 1000 (tuition 800 / other 200). Year 2: 2000 (tuition 1500 /
+        // other 500). A 2-year course bills four periods, two per year.
+        let make = |date: &str| {
+            let mut req = student_req(PRT, &course.id, date, 1000.0);
+            req.tuition_fee_year_1 = Some(800.0);
+            req.other_fee_year_1 = Some(200.0);
+            req.fee_year_2 = 2000.0;
+            req.tuition_fee_year_2 = Some(1500.0);
+            req.other_fee_year_2 = Some(500.0);
+            req
+        };
+        let cross = db::create_student(&pool, make("2026-09-01"), ADMIN).await?;
+        let intra = db::create_student(&pool, make("2026-09-02"), ADMIN).await?;
+
+        // Both reach period 3 (year 2, first semester): periods 1, 2 (year 1)
+        // and 3 (year 2) are now due.
+        promote_to_period(&pool, &course, &cross.id, 3).await?;
+        promote_to_period(&pool, &course, &intra.id, 3).await?;
+
+        // Tuition due so far: 800 (year 1) + 750 (half of year 2) = 1550.
+        // Pay 1000 -> fills year 1 (800), spills 200 into year 2's 750.
+        db::create_receipt(
+            &pool,
+            ReceiptRequest {
+                student_id: cross.id.clone(),
+                receipt_date: "2027-02-05".into(),
+                fee_type: "Tuition".into(),
+                amount_paid: 1000.0,
+                payment_mode: "Cash".into(),
+                reference_no: None,
+            },
+            PRT,
+            ADMIN,
+        )
+        .await?;
+        // Pay 300 -> less than one period's 400, so it stays entirely in year 1.
+        db::create_receipt(
+            &pool,
+            ReceiptRequest {
+                student_id: intra.id.clone(),
+                receipt_date: "2027-02-05".into(),
+                fee_type: "Tuition".into(),
+                amount_paid: 300.0,
+                payment_mode: "Cash".into(),
+                reference_no: None,
+            },
+            PRT,
+            ADMIN,
+        )
+        .await?;
+
+        let rows = db::outstanding(&pool, Some(PRT)).await?;
+        let cross_row = rows
+            .iter()
+            .find(|r| r.student.id == cross.id)
+            .ok_or("cross-year row missing")?;
+        let intra_row = rows
+            .iter()
+            .find(|r| r.student.id == intra.id)
+            .ok_or("intra-year row missing")?;
+
+        // Cross-year payment: year 1 tuition fully covered before year 2 sees a
+        // rupee, proving earliest-period-first allocation.
+        let cy1 = year_row(cross_row, 1);
+        assert_eq!((cy1.tuition.due, cy1.tuition.paid, cy1.tuition.pending), (800.0, 800.0, 0.0));
+        assert_eq!((cy1.other.due, cy1.other.paid, cy1.other.pending), (200.0, 0.0, 200.0));
+        assert_eq!((cy1.total_due, cy1.total_paid, cy1.pending), (1000.0, 800.0, 200.0));
+        let cy2 = year_row(cross_row, 2);
+        assert_eq!((cy2.tuition.due, cy2.tuition.paid, cy2.tuition.pending), (750.0, 200.0, 550.0));
+        assert_eq!((cy2.other.due, cy2.other.paid, cy2.other.pending), (250.0, 0.0, 250.0));
+        assert_eq!((cy2.total_due, cy2.total_paid, cy2.pending), (1000.0, 200.0, 800.0));
+        assert_eq!((cross_row.total_due, cross_row.total_paid, cross_row.pending), (2000.0, 1000.0, 1000.0));
+
+        // Intra-year partial: 300 lands on period 1 only (its 400 due), leaving
+        // period 2 of year 1 fully pending; year 2 is untouched.
+        let iy1 = year_row(intra_row, 1);
+        assert_eq!((iy1.tuition.due, iy1.tuition.paid, iy1.tuition.pending), (800.0, 300.0, 500.0));
+        let iy2 = year_row(intra_row, 2);
+        assert_eq!((iy2.tuition.due, iy2.tuition.paid, iy2.tuition.pending), (750.0, 0.0, 750.0));
+
+        Ok(())
+    }
+
+    // Courses longer than the 4-year / 8-semester fee model must be rejected at
+    // creation, with the boundary values still accepted.
+    async fn course_duration_is_capped_run() -> Result<(), String> {
+        let (_tmp, pool) = test_pool().await?;
+
+        let mut five_years = course_req(PRT, "Too Long Years");
+        five_years.duration = 5;
+        five_years.duration_type = "year".into();
+        assert!(
+            db::create_course(&pool, five_years).await.is_err(),
+            "courses longer than 4 years must be rejected"
+        );
+
+        let mut ten_sems = course_req(PRT, "Too Long Sems");
+        ten_sems.duration = 10;
+        ten_sems.duration_type = "semester".into();
+        assert!(
+            db::create_course(&pool, ten_sems).await.is_err(),
+            "courses longer than 8 semesters must be rejected"
+        );
+
+        let mut four_years = course_req(PRT, "Four Years");
+        four_years.duration = 4;
+        four_years.duration_type = "year".into();
+        assert!(
+            db::create_course(&pool, four_years).await.is_ok(),
+            "the 4-year boundary stays valid"
+        );
+
+        let mut eight_sems = course_req(PRT, "Eight Sems");
+        eight_sems.duration = 8;
+        eight_sems.duration_type = "semester".into();
+        assert!(
+            db::create_course(&pool, eight_sems).await.is_ok(),
+            "the 8-semester boundary stays valid"
+        );
+
+        Ok(())
+    }
+
     #[derive(Clone)]
     struct FlowStudent {
         id: String,
         course_id: String,
         slot: usize,
+    }
+
+    #[derive(serde::Serialize)]
+    struct AdmissionPayload {
+        file_name: String,
+        student: Student,
+        course: Course,
+        branch: Branch,
+    }
+
+    #[derive(serde::Serialize)]
+    struct ReceiptPayload {
+        file_name: String,
+        receipt: Receipt,
+        student: Student,
+        course: Course,
+        branch: Branch,
+    }
+
+    #[derive(serde::Serialize)]
+    struct ReceiptStagePayload {
+        name: String,
+        receipts: Vec<ReceiptPayload>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct OutstandingStagePayload {
+        name: String,
+        rows: Vec<OutstandingRow>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct PrintPayload {
+        artifact_dir: String,
+        admissions: Vec<AdmissionPayload>,
+        receipt_stages: Vec<ReceiptStagePayload>,
+        outstanding_stages: Vec<OutstandingStagePayload>,
     }
 
     fn total_years(course: &Course) -> i64 {
@@ -1361,15 +1560,6 @@ mod smoke_tests {
         }
     }
 
-    fn escape_html(value: &str) -> String {
-        value
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&#39;")
-    }
-
     fn write_file(path: &Path, content: &str) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -1377,106 +1567,8 @@ mod smoke_tests {
         std::fs::write(path, content).map_err(|e| e.to_string())
     }
 
-    fn admission_form_html(student: &Student, course: &Course, branch: &Branch) -> String {
-        format!(
-            "<!doctype html><html><head><meta charset=\"utf-8\"><title>Admission {form}</title>\
-             <style>body{{font-family:Arial,sans-serif;margin:32px;}}table{{border-collapse:collapse;width:100%;}}td,th{{border:1px solid #444;padding:6px;text-align:left;}}</style>\
-             </head><body><h1>Admission Form</h1><table>\
-             <tr><th>Form No</th><td>{form}</td></tr>\
-             <tr><th>Date</th><td>{date}</td></tr>\
-             <tr><th>Branch</th><td>{branch}</td></tr>\
-             <tr><th>Course</th><td>{course}</td></tr>\
-             <tr><th>Name</th><td>{surname} {name} {father}</td></tr>\
-             <tr><th>Category / Gender</th><td>{category} / {gender}</td></tr>\
-             <tr><th>Address</th><td>{address}, {taluka}, {district} {pincode}</td></tr>\
-             <tr><th>Student Phone</th><td>{student_phone}</td></tr>\
-             <tr><th>Parent Phone</th><td>{parent_phone}</td></tr>\
-             <tr><th>Fees</th><td>Y1 {y1:.0}, Y2 {y2:.0}, Y3 {y3:.0}, Y4 {y4:.0}</td></tr>\
-             </table></body></html>",
-            form = escape_html(&student.form_no),
-            date = escape_html(&student.admission_date),
-            branch = escape_html(&branch.name),
-            course = escape_html(&course.name),
-            surname = escape_html(&student.surname),
-            name = escape_html(&student.student_name),
-            father = escape_html(&student.father_name),
-            category = escape_html(&student.category),
-            gender = escape_html(&student.gender),
-            address = escape_html(&student.address),
-            taluka = escape_html(&student.taluka),
-            district = escape_html(&student.district),
-            pincode = escape_html(&student.pincode),
-            student_phone = escape_html(&student.student_phone),
-            parent_phone = escape_html(&student.parent_phone),
-            y1 = student.fee_year_1,
-            y2 = student.fee_year_2,
-            y3 = student.fee_year_3,
-            y4 = student.fee_year_4,
-        )
-    }
-
-    fn receipt_register_html(title: &str, rows: &[(Receipt, Student)]) -> String {
-        let mut body = String::from(
-            "<!doctype html><html><head><meta charset=\"utf-8\"><style>\
-             body{font-family:Arial,sans-serif;margin:32px;}table{border-collapse:collapse;width:100%;}\
-             td,th{border:1px solid #444;padding:6px;text-align:left;}td.num{text-align:right;}\
-             </style></head><body>",
-        );
-        body.push_str(&format!("<h1>{}</h1><table><thead><tr><th>Receipt No</th><th>Date</th><th>Student</th><th>Form</th><th>Course</th><th>Fee Type</th><th>Mode</th><th>Amount</th></tr></thead><tbody>", escape_html(title)));
-        for (receipt, student) in rows {
-            body.push_str(&format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"num\">{:.0}</td></tr>",
-                escape_html(&receipt.receipt_no),
-                escape_html(&receipt.receipt_date),
-                escape_html(&student.student_name),
-                escape_html(&student.form_no),
-                escape_html(&student.course_name),
-                escape_html(&receipt.fee_type),
-                escape_html(&receipt.payment_mode),
-                receipt.amount_paid,
-            ));
-        }
-        body.push_str("</tbody></table></body></html>");
-        body
-    }
-
     fn csv_escape(value: &str) -> String {
         format!("\"{}\"", value.replace('"', "\"\""))
-    }
-
-    fn save_outstanding_snapshot(
-        artifact_dir: &Path,
-        file_name: &str,
-        rows: &[OutstandingRow],
-    ) -> Result<(), String> {
-        let mut csv = String::from(
-            "form_no,student_name,branch,course,current_period,total_due,total_paid,pending,last_receipt_no,year1_pending,year2_pending,year3_pending,year4_pending\n",
-        );
-        for row in rows {
-            let mut year_pending = [0.0; 4];
-            for breakdown in &row.year_breakdown {
-                if (1..=4).contains(&breakdown.year) {
-                    year_pending[(breakdown.year - 1) as usize] = breakdown.pending;
-                }
-            }
-            csv.push_str(&format!(
-                "{},{},{},{},{},{:.0},{:.0},{:.0},{},{:.0},{:.0},{:.0},{:.0}\n",
-                csv_escape(&row.student.form_no),
-                csv_escape(&row.student.student_name),
-                csv_escape(&row.student.branch_name),
-                csv_escape(&row.student.course_name),
-                csv_escape(&row.current_period),
-                row.total_due,
-                row.total_paid,
-                row.pending,
-                csv_escape(row.last_receipt_no.as_deref().unwrap_or("")),
-                year_pending[0],
-                year_pending[1],
-                year_pending[2],
-                year_pending[3],
-            ));
-        }
-        write_file(&artifact_dir.join("outstanding").join(file_name), &csv)
     }
 
     async fn outstanding_rows_for_students(
@@ -1524,12 +1616,13 @@ mod smoke_tests {
 
     async fn save_pending_receipts(
         pool: &SqlitePool,
-        artifact_dir: &Path,
         stage: &str,
         date: &str,
         students: &[FlowStudent],
-    ) -> Result<Vec<(Receipt, Student)>, String> {
-        let mut rows = Vec::new();
+        courses_by_id: &HashMap<String, Course>,
+        branches_by_id: &HashMap<String, Branch>,
+    ) -> Result<ReceiptStagePayload, String> {
+        let mut receipts = Vec::new();
         for flow_student in students {
             let pending = pending_for_student(pool, &flow_student.id).await?;
             if pending <= 0.0 {
@@ -1550,28 +1643,67 @@ mod smoke_tests {
                 ADMIN,
             )
             .await?;
-            rows.push((receipt, student));
+            let course = courses_by_id
+                .get(&student.course_id)
+                .ok_or_else(|| "Course missing for receipt payload".to_string())?
+                .clone();
+            let branch = branches_by_id
+                .get(&student.branch_id)
+                .ok_or_else(|| "Branch missing for receipt payload".to_string())?
+                .clone();
+            let file_name = format!(
+                "{}-{}.html",
+                sanitize_file_part(&receipt.receipt_no),
+                sanitize_file_part(&student.form_no)
+            );
+            receipts.push(ReceiptPayload {
+                file_name,
+                receipt,
+                student,
+                course,
+                branch,
+            });
         }
 
-        let html = receipt_register_html(stage, &rows);
-        write_file(
-            &artifact_dir
-                .join("receipts")
-                .join(format!("{}.html", sanitize_file_part(stage))),
-            &html,
-        )?;
-        Ok(rows)
+        Ok(ReceiptStagePayload {
+            name: stage.to_string(),
+            receipts,
+        })
+    }
+
+    fn run_app_print_renderer(repo_root: &Path, payload_path: &Path) -> Result<(), String> {
+        let build_status = Command::new("bun")
+            .args(["run", "build"])
+            .current_dir(repo_root)
+            .status()
+            .map_err(|e| format!("Unable to run frontend build: {e}"))?;
+        if !build_status.success() {
+            return Err("Frontend build failed before print rendering".to_string());
+        }
+
+        let vitest = repo_root.join("node_modules/.bin/vitest");
+        let render_status = Command::new(vitest)
+            .args(["run", "src/test/elaborate-print-render.test.tsx"])
+            .env("GEWT_PRINT_FLOW_INPUT", payload_path)
+            .current_dir(repo_root)
+            .status()
+            .map_err(|e| format!("Unable to run print renderer: {e}"))?;
+        if !render_status.success() {
+            return Err("App print renderer failed".to_string());
+        }
+
+        Ok(())
     }
 
     async fn elaborate_fee_office_flow_run() -> Result<PathBuf, String> {
         let (_tmp, pool) = test_pool().await?;
         let artifact_dir = downloads_artifact_dir()?;
-        let admission_dir = artifact_dir.join("admission-forms");
-        std::fs::create_dir_all(&admission_dir).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&artifact_dir).map_err(|e| e.to_string())?;
 
         let branches = db::list_branches(&pool, None).await?;
         let branches_by_id: HashMap<String, Branch> = branches
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|branch| (branch.id.clone(), branch))
             .collect();
         let courses = db::list_courses(&pool, None, false).await?;
@@ -1583,6 +1715,9 @@ mod smoke_tests {
             .map(|course| (course.id.clone(), course))
             .collect();
         let mut flow_students = Vec::new();
+        let mut admissions = Vec::new();
+        let mut receipt_stages = Vec::new();
+        let mut outstanding_stages = Vec::new();
         let mut manifest = String::from(
             "GEWT elaborate fee-office regression flow\n\nThis bundle is generated by the ignored Rust test `elaborate_fee_office_flow_with_saved_artifacts`.\n\n",
         );
@@ -1609,10 +1744,12 @@ mod smoke_tests {
                     sanitize_file_part(&course.name),
                     sanitize_file_part(&student.form_no)
                 );
-                write_file(
-                    &admission_dir.join(file_name),
-                    &admission_form_html(&student, course, branch),
-                )?;
+                admissions.push(AdmissionPayload {
+                    file_name,
+                    student: student.clone(),
+                    course: course.clone(),
+                    branch: branch.clone(),
+                });
                 flow_students.push(FlowStudent {
                     id: student.id,
                     course_id: course.id.clone(),
@@ -1636,35 +1773,36 @@ mod smoke_tests {
             flow_students.len(),
             "new admissions should owe the first term/semester"
         );
-        save_outstanding_snapshot(
-            &artifact_dir,
-            "00-after-admission-before-receipts.csv",
-            &after_admission,
-        )?;
+        outstanding_stages.push(OutstandingStagePayload {
+            name: "00 after admission before receipts".into(),
+            rows: after_admission,
+        });
 
-        let period1_receipts = save_pending_receipts(
+        let period1_stage = save_pending_receipts(
             &pool,
-            &artifact_dir,
             "01 period 1 receipts after admission",
             "2026-09-05",
             &flow_students,
+            &courses_by_id,
+            &branches_by_id,
         )
         .await?;
         assert_eq!(
-            period1_receipts.len(),
+            period1_stage.receipts.len(),
             flow_students.len(),
             "every admitted student should receive a period 1 receipt"
         );
+        let period1_receipt_count = period1_stage.receipts.len();
+        receipt_stages.push(period1_stage);
         let after_period1 = outstanding_rows_for_students(&pool, &student_ids).await?;
         assert!(
             after_period1.is_empty(),
             "period 1 receipts should clear first-period outstanding"
         );
-        save_outstanding_snapshot(
-            &artifact_dir,
-            "02-after-period-1-receipts.csv",
-            &after_period1,
-        )?;
+        outstanding_stages.push(OutstandingStagePayload {
+            name: "02 after period 1 receipts".into(),
+            rows: after_period1,
+        });
 
         for course in &courses {
             let response = promote_course_students(&pool, course, &flow_students).await?;
@@ -1675,29 +1813,31 @@ mod smoke_tests {
             assert_eq!(response.skipped_count, 0);
         }
 
-        let period2_receipts = save_pending_receipts(
+        let period2_stage = save_pending_receipts(
             &pool,
-            &artifact_dir,
             "03 period 2 receipts completing year 1",
             "2027-02-05",
             &flow_students,
+            &courses_by_id,
+            &branches_by_id,
         )
         .await?;
         assert_eq!(
-            period2_receipts.len(),
+            period2_stage.receipts.len(),
             flow_students.len(),
             "every student should receive the second receipt for year 1"
         );
+        let period2_receipt_count = period2_stage.receipts.len();
+        receipt_stages.push(period2_stage);
         let after_year1 = outstanding_rows_for_students(&pool, &student_ids).await?;
         assert!(
             after_year1.is_empty(),
             "two receipts should fully clear year 1"
         );
-        save_outstanding_snapshot(
-            &artifact_dir,
-            "04-after-year-1-two-receipts.csv",
-            &after_year1,
-        )?;
+        outstanding_stages.push(OutstandingStagePayload {
+            name: "04 after year 1 two receipts".into(),
+            rows: after_year1,
+        });
 
         for course in &courses {
             let response = promote_course_students(&pool, course, &flow_students).await?;
@@ -1763,35 +1903,36 @@ mod smoke_tests {
             !after_period3_fee_change.is_empty(),
             "year 2 fee edits should create current-period outstanding"
         );
-        save_outstanding_snapshot(
-            &artifact_dir,
-            "05-after-year-2-fee-change-before-period-3-receipts.csv",
-            &after_period3_fee_change,
-        )?;
+        outstanding_stages.push(OutstandingStagePayload {
+            name: "05 after year 2 fee change before period 3 receipts".into(),
+            rows: after_period3_fee_change,
+        });
 
-        let period3_receipts = save_pending_receipts(
+        let period3_stage = save_pending_receipts(
             &pool,
-            &artifact_dir,
             "06 period 3 receipts after year 2 fee change",
             "2027-09-05",
             &period3_students,
+            &courses_by_id,
+            &branches_by_id,
         )
         .await?;
         assert_eq!(
-            period3_receipts.len(),
+            period3_stage.receipts.len(),
             period3_students.len(),
             "all period 3 students should receive a receipt"
         );
+        let period3_receipt_count = period3_stage.receipts.len();
+        receipt_stages.push(period3_stage);
         let after_period3_receipts = outstanding_rows_for_students(&pool, &student_ids).await?;
         assert!(
             after_period3_receipts.is_empty(),
             "period 3 receipts should clear outstanding"
         );
-        save_outstanding_snapshot(
-            &artifact_dir,
-            "07-after-period-3-receipts.csv",
-            &after_period3_receipts,
-        )?;
+        outstanding_stages.push(OutstandingStagePayload {
+            name: "07 after period 3 receipts".into(),
+            rows: after_period3_receipts,
+        });
 
         let period4_students = flow_students
             .iter()
@@ -1823,11 +1964,10 @@ mod smoke_tests {
             ));
         }
         let after_second_fee_change = outstanding_rows_for_students(&pool, &student_ids).await?;
-        save_outstanding_snapshot(
-            &artifact_dir,
-            "08-after-second-year-2-fee-change.csv",
-            &after_second_fee_change,
-        )?;
+        outstanding_stages.push(OutstandingStagePayload {
+            name: "08 after second year 2 fee change".into(),
+            rows: after_second_fee_change,
+        });
 
         for course in courses.iter().filter(|course| total_periods(course) > 3) {
             let response = promote_course_students(&pool, course, &flow_students).await?;
@@ -1837,29 +1977,31 @@ mod smoke_tests {
             );
             assert_eq!(response.skipped_count, 0);
         }
-        let period4_receipts = save_pending_receipts(
+        let period4_stage = save_pending_receipts(
             &pool,
-            &artifact_dir,
             "09 period 4 receipts completing year 2",
             "2028-02-05",
             &period4_students,
+            &courses_by_id,
+            &branches_by_id,
         )
         .await?;
         assert_eq!(
-            period4_receipts.len(),
+            period4_stage.receipts.len(),
             period4_students.len(),
             "all period 4 students should receive a receipt"
         );
+        let period4_receipt_count = period4_stage.receipts.len();
+        receipt_stages.push(period4_stage);
         let after_year2 = outstanding_rows_for_students(&pool, &student_ids).await?;
         assert!(
             after_year2.is_empty(),
             "period 3 and period 4 receipts should clear year 2"
         );
-        save_outstanding_snapshot(
-            &artifact_dir,
-            "10-after-year-2-four-receipts.csv",
-            &after_year2,
-        )?;
+        outstanding_stages.push(OutstandingStagePayload {
+            name: "10 after year 2 four receipts".into(),
+            rows: after_year2,
+        });
 
         let period5_students = flow_students
             .iter()
@@ -1907,11 +2049,10 @@ mod smoke_tests {
             ));
         }
         let after_year3_fee_change = outstanding_rows_for_students(&pool, &student_ids).await?;
-        save_outstanding_snapshot(
-            &artifact_dir,
-            "11-after-year-3-fee-change-before-receipts.csv",
-            &after_year3_fee_change,
-        )?;
+        outstanding_stages.push(OutstandingStagePayload {
+            name: "11 after year 3 fee change before receipts".into(),
+            rows: after_year3_fee_change,
+        });
 
         write_file(
             &artifact_dir.join("fee-change-checkpoints.csv"),
@@ -1922,10 +2063,10 @@ mod smoke_tests {
             "Admitted students: {}\nActive courses covered: {}\nPeriod 1 receipts: {}\nPeriod 2 receipts: {}\nPeriod 3 receipts: {}\nPeriod 4 receipts: {}\n\n",
             flow_students.len(),
             courses.len(),
-            period1_receipts.len(),
-            period2_receipts.len(),
-            period3_receipts.len(),
-            period4_receipts.len(),
+            period1_receipt_count,
+            period2_receipt_count,
+            period3_receipt_count,
+            period4_receipt_count,
         ));
         manifest.push_str(
             "Flow:\n\
@@ -1939,7 +2080,26 @@ mod smoke_tests {
              8. Change year-2 fees again for selected students, promote to period 4, record receipts, and save year-2 outstanding.\n\
              9. Promote longer courses to period 5; verify year-2 fees are locked while year-3 fees remain editable, then save outstanding.\n",
         );
+        manifest.push_str(
+            "\nSaved documents are rendered through the app's React print components: AdmissionPrint, ReceiptPrint, and OutstandingPrint.\n",
+        );
         write_file(&artifact_dir.join("00-flow-manifest.txt"), &manifest)?;
+
+        let payload = PrintPayload {
+            artifact_dir: artifact_dir.display().to_string(),
+            admissions,
+            receipt_stages,
+            outstanding_stages,
+        };
+        let payload_path = artifact_dir.join("app-print-payload.json");
+        let payload_json = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+        write_file(&payload_path, &payload_json)?;
+
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .ok_or_else(|| "Unable to locate repository root".to_string())?
+            .to_path_buf();
+        run_app_print_renderer(&repo_root, &payload_path)?;
 
         Ok(artifact_dir)
     }
@@ -2372,6 +2532,18 @@ mod smoke_tests {
     fn course_branch_moves_respect_enrollment() {
         tauri::async_runtime::block_on(course_branch_moves_respect_enrollment_run())
             .expect("course branch move test failed");
+    }
+
+    #[test]
+    fn outstanding_partial_payment_allocation() {
+        tauri::async_runtime::block_on(outstanding_partial_payment_allocation_run())
+            .expect("outstanding partial payment allocation test failed");
+    }
+
+    #[test]
+    fn course_duration_is_capped() {
+        tauri::async_runtime::block_on(course_duration_is_capped_run())
+            .expect("course duration cap test failed");
     }
 
     #[test]
