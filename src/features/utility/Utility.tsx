@@ -906,9 +906,9 @@ export function Utility({
               ) : (
                 <Table className="min-w-[760px] table-fixed">
                   <colgroup>
+                    <col className="w-[240px]" />
                     <col className="w-[300px]" />
-                    <col className="w-[150px]" />
-                    <col className="w-[210px]" />
+                    <col className="w-[140px]" />
                     <col className="w-[100px]" />
                   </colgroup>
                   <TableHeader>
