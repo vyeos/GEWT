@@ -3,7 +3,6 @@ import {
   Check,
   ChevronsUpDown,
   Printer,
-  UserPlus,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -409,11 +408,140 @@ export function Admission({
             </div>
           </div>
 
-          <StudentPhotoField
-            value={form.photo}
-            onChange={(photo) => setForm((current) => ({ ...current, photo }))}
-            disabled={isSaving}
-          />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-[auto_1fr]">
+            <div className="sm:row-span-3">
+              <StudentPhotoField
+                value={form.photo}
+                onChange={(photo) => setForm((current) => ({ ...current, photo }))}
+                disabled={isSaving}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="flex flex-col gap-2">
+                <Label>Surname *</Label>
+                <Input
+                  required
+                  value={form.surname}
+                  onChange={(e) =>
+                    setForm({ ...form, surname: e.currentTarget.value })
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Student's name *</Label>
+                <Input
+                  required
+                  value={form.student_name}
+                  onChange={(e) =>
+                    setForm({ ...form, student_name: e.currentTarget.value })
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Father's name *</Label>
+                <Input
+                  required
+                  value={form.father_name}
+                  onChange={(e) =>
+                    setForm({ ...form, father_name: e.currentTarget.value })
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="flex flex-col gap-2">
+                <Label>Category</Label>
+                <Select
+                  value={form.category}
+                  onValueChange={(category) => setForm({ ...form, category })}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {categories.map((category) => (
+                        <SelectItem key={category} value={category}>
+                          {category}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Religion</Label>
+                <Input
+                  value={form.religion}
+                  onChange={(e) =>
+                    setForm({ ...form, religion: e.currentTarget.value })
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Caste</Label>
+                <Input
+                  value={form.caste}
+                  onChange={(e) =>
+                    setForm({ ...form, caste: e.currentTarget.value })
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Gender</Label>
+                <div className="flex h-8 items-center gap-5">
+                  {["Male", "Female"].map((gender) => (
+                    <label
+                      key={gender}
+                      className="flex items-center gap-2 text-sm font-medium"
+                    >
+                      <input
+                        type="radio"
+                        name="gender"
+                        value={gender}
+                        checked={form.gender === gender}
+                        onChange={() => setForm({ ...form, gender })}
+                        className="size-4 accent-primary"
+                      />
+                      {gender}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="flex flex-col gap-2">
+                <Label>Aadhar No.</Label>
+                <Input
+                  value={form.aadhar}
+                  onChange={(e) =>
+                    setForm({ ...form, aadhar: e.currentTarget.value })
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Student Phone</Label>
+                <Input
+                  value={form.student_phone}
+                  onChange={(e) =>
+                    setForm({ ...form, student_phone: e.currentTarget.value })
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Parent Phone</Label>
+                <Input
+                  value={form.parent_phone}
+                  onChange={(e) =>
+                    setForm({ ...form, parent_phone: e.currentTarget.value })
+                  }
+                />
+              </div>
+            </div>
+          </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="flex flex-col gap-2">
@@ -466,131 +594,6 @@ export function Admission({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div className="flex flex-col gap-2">
-              <Label>Surname *</Label>
-              <Input
-                required
-                value={form.surname}
-                onChange={(e) =>
-                  setForm({ ...form, surname: e.currentTarget.value })
-                }
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label>Student's name *</Label>
-              <Input
-                required
-                value={form.student_name}
-                onChange={(e) =>
-                  setForm({ ...form, student_name: e.currentTarget.value })
-                }
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label>Father's name *</Label>
-              <Input
-                required
-                value={form.father_name}
-                onChange={(e) =>
-                  setForm({ ...form, father_name: e.currentTarget.value })
-                }
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="flex flex-col gap-2">
-              <Label>Category</Label>
-              <Select
-                value={form.category}
-                onValueChange={(category) => setForm({ ...form, category })}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {categories.map((category) => (
-                      <SelectItem key={category} value={category}>
-                        {category}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label>Religion</Label>
-              <Input
-                value={form.religion}
-                onChange={(e) =>
-                  setForm({ ...form, religion: e.currentTarget.value })
-                }
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label>Caste</Label>
-              <Input
-                value={form.caste}
-                onChange={(e) =>
-                  setForm({ ...form, caste: e.currentTarget.value })
-                }
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label>Gender</Label>
-              <div className="flex h-8 items-center gap-5">
-                {["Male", "Female"].map((gender) => (
-                  <label
-                    key={gender}
-                    className="flex items-center gap-2 text-sm font-medium"
-                  >
-                    <input
-                      type="radio"
-                      name="gender"
-                      value={gender}
-                      checked={form.gender === gender}
-                      onChange={() => setForm({ ...form, gender })}
-                      className="size-4 accent-primary"
-                    />
-                    {gender}
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div className="flex flex-col gap-2">
-              <Label>Aadhar No.</Label>
-              <Input
-                value={form.aadhar}
-                onChange={(e) =>
-                  setForm({ ...form, aadhar: e.currentTarget.value })
-                }
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label>Student Phone</Label>
-              <Input
-                value={form.student_phone}
-                onChange={(e) =>
-                  setForm({ ...form, student_phone: e.currentTarget.value })
-                }
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label>Parent Phone</Label>
-              <Input
-                value={form.parent_phone}
-                onChange={(e) =>
-                  setForm({ ...form, parent_phone: e.currentTarget.value })
-                }
-              />
-            </div>
-          </div>
-
           <div className="flex flex-col gap-2">
             <Label>Address</Label>
             <Textarea
@@ -633,17 +636,6 @@ export function Admission({
           </div>
 
           <div className="flex justify-end gap-2">
-            <Button
-              type="submit"
-              variant="outline"
-              disabled={isSaving}
-              onClick={() => {
-                shouldPrintRef.current = false;
-              }}
-            >
-              <UserPlus className="size-4" />
-              {isSaving ? "Saving..." : "Save admission"}
-            </Button>
             <Button
               type="submit"
               disabled={isSaving}

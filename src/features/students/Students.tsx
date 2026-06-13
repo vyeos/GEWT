@@ -663,130 +663,131 @@ export function Students({
               </div>
             </div>
 
-            <StudentPhotoField
-              value={form.photo}
-              onChange={(photo) => updateForm("photo", photo)}
-              disabled={saving || isCancelled}
-            />
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[auto_1fr]">
+              <div className="sm:row-span-3">
+                <StudentPhotoField
+                  value={form.photo}
+                  onChange={(photo) => updateForm("photo", photo)}
+                  disabled={saving || isCancelled}
+                />
+              </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div className="flex flex-col gap-2">
-                <Label>Surname</Label>
-                <Input
-                  value={form.surname}
-                  onChange={(e) => updateForm("surname", e.currentTarget.value)}
-                />
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div className="flex flex-col gap-2">
+                  <Label>Surname</Label>
+                  <Input
+                    value={form.surname}
+                    onChange={(e) => updateForm("surname", e.currentTarget.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Student name</Label>
+                  <Input
+                    required
+                    value={form.student_name}
+                    onChange={(e) =>
+                      updateForm("student_name", e.currentTarget.value)
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Father's name</Label>
+                  <Input
+                    value={form.father_name}
+                    onChange={(e) =>
+                      updateForm("father_name", e.currentTarget.value)
+                    }
+                  />
+                </div>
               </div>
-              <div className="flex flex-col gap-2">
-                <Label>Student name</Label>
-                <Input
-                  required
-                  value={form.student_name}
-                  onChange={(e) =>
-                    updateForm("student_name", e.currentTarget.value)
-                  }
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label>Father's name</Label>
-                <Input
-                  value={form.father_name}
-                  onChange={(e) =>
-                    updateForm("father_name", e.currentTarget.value)
-                  }
-                />
-              </div>
-            </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="flex flex-col gap-2">
-                <Label>Category</Label>
-                <Select
-                  value={form.category}
-                  onValueChange={(value) => updateForm("category", value)}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {categories.map((category) => (
-                        <SelectItem key={category} value={category}>
-                          {category}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+                <div className="flex flex-col gap-2">
+                  <Label>Category</Label>
+                  <Select
+                    value={form.category}
+                    onValueChange={(value) => updateForm("category", value)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {categories.map((category) => (
+                          <SelectItem key={category} value={category}>
+                            {category}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Religion</Label>
+                  <Input
+                    value={form.religion}
+                    onChange={(e) => updateForm("religion", e.currentTarget.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Caste</Label>
+                  <Input
+                    value={form.caste}
+                    onChange={(e) => updateForm("caste", e.currentTarget.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Gender</Label>
+                  <Select
+                    value={form.gender}
+                    onValueChange={(value) => updateForm("gender", value)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {genders.map((gender) => (
+                          <SelectItem key={gender} value={gender}>
+                            {gender}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
-              <div className="flex flex-col gap-2">
-                <Label>Gender</Label>
-                <Select
-                  value={form.gender}
-                  onValueChange={(value) => updateForm("gender", value)}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {genders.map((gender) => (
-                        <SelectItem key={gender} value={gender}>
-                          {gender}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="flex flex-col gap-2">
-                <Label>Religion</Label>
-                <Input
-                  value={form.religion}
-                  onChange={(e) => updateForm("religion", e.currentTarget.value)}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label>Caste</Label>
-                <Input
-                  value={form.caste}
-                  onChange={(e) => updateForm("caste", e.currentTarget.value)}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label>Aadhar No.</Label>
-                <Input
-                  value={form.aadhar}
-                  onChange={(e) => updateForm("aadhar", e.currentTarget.value)}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label>Admission year</Label>
-                <Input disabled value={admissionYear(selectedStudent)} />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="flex flex-col gap-2">
-                <Label>Student Phone</Label>
-                <Input
-                  value={form.student_phone}
-                  onChange={(e) =>
-                    updateForm("student_phone", e.currentTarget.value)
-                  }
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label>Parent Phone</Label>
-                <Input
-                  value={form.parent_phone}
-                  onChange={(e) =>
-                    updateForm("parent_phone", e.currentTarget.value)
-                  }
-                />
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+                <div className="flex flex-col gap-2">
+                  <Label>Aadhar No.</Label>
+                  <Input
+                    value={form.aadhar}
+                    onChange={(e) => updateForm("aadhar", e.currentTarget.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Student Phone</Label>
+                  <Input
+                    value={form.student_phone}
+                    onChange={(e) =>
+                      updateForm("student_phone", e.currentTarget.value)
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Parent Phone</Label>
+                  <Input
+                    value={form.parent_phone}
+                    onChange={(e) =>
+                      updateForm("parent_phone", e.currentTarget.value)
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Admission year</Label>
+                  <Input disabled value={admissionYear(selectedStudent)} />
+                </div>
               </div>
             </div>
 
