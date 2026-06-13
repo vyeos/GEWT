@@ -1,70 +1,54 @@
 # GEWT Fee Management
 
-Tauri + React desktop client with a Rust Axum API and PostgreSQL persistence.
+A desktop fee-management application for an academic trust/institute, built with
+Tauri 2 (Rust) and React. It is **fully local**: a single SQLite database owned
+by the Rust side of the app, with no server and no network dependency. Machines
+exchange data through branch-partitioned `.gewtbak` backup files ("sneakernet"),
+and can optionally share one database over a LAN folder.
 
-## Desktop Client
+See [agents.md](agents.md) for the full architecture, domain rules, and
+engineering conventions.
+
+## Stack
+
+- Desktop shell: Tauri 2 (`src-tauri/`)
+- Frontend: Vite, React 19, TypeScript, Tailwind CSS 4, shadcn/Radix UI
+- Data layer: local SQLite owned by Rust (`src-tauri/src/db.rs`) — no server
+- Package manager: Bun
+
+The frontend talks to Rust through Tauri commands (`invoke`). `src/lib/api.ts`
+maps the old REST-style paths onto those commands; there is no HTTP API.
+
+## Develop
 
 ```bash
 bun install
-bun run dev
+bun run dev          # frontend only (most flows need the Tauri backend)
+bun run tauri dev    # the real desktop app
 ```
 
-Set `VITE_API_BASE_URL` if the API is not running on `http://localhost:45123`.
+The seeded admin login is user ID `admin`, password `admin123`. It exists only
+for first launch and is meant to be rotated by the admin afterwards.
+
+## Build
 
 ```bash
-VITE_API_BASE_URL=http://localhost:45123 bun run dev
+bun run build        # tsc + vite build
+bun run tauri build  # packaged desktop app
 ```
-
-## Shipped Desktop API Configuration
-
-The packaged Tauri app starts the Rust API inside the desktop app. On user
-machines, put the API environment file at the app config path:
-
-macOS:
-
-```text
-~/Library/Application Support/com.vyeos.gewt/.env
-```
-
-Windows:
-
-```text
-%APPDATA%\com.vyeos.gewt\.env
-```
-
-Example:
-
-```env
-DATABASE_URL=postgres://user:password@host:5432/gewt
-JWT_SECRET=replace-me-with-a-long-random-secret
-API_ADDR=127.0.0.1:45123
-```
-
-The desktop UI talks to the embedded API on `http://localhost:45123`.
-
-## API
-
-```bash
-cd api
-export DATABASE_URL=postgres://postgres:postgres@localhost:5432/gewt
-export JWT_SECRET=replace-me
-export API_ADDR=127.0.0.1:45123
-cargo run
-```
-
-The API runs migrations on startup. Seed data includes branches `Prantij`, `HMT`, `Talod`, September as the academic year start month, and the initial admin login:
-
-```text
-user ID: admin
-password: admin123
-```
-
-Rotate the seeded password and `JWT_SECRET` before production use.
 
 ## Checks
 
 ```bash
-bun run build
-cd api && cargo check
+bun run build                  # or: bunx tsc --noEmit
+bun run test                   # frontend unit/component tests (vitest)
+cd src-tauri && cargo test     # db/backup/fee smoke tests
 cd src-tauri && cargo check
 ```
+
+## Distribution
+
+Packaged apps are built and published as GitHub releases by the CI workflow on
+push to `master`. The installed app auto-installs updates at startup (time
+capped) and also downloads them in the background, using GitHub release
+metadata.

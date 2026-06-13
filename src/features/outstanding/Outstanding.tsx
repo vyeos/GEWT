@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Check, ChevronsUpDown, Printer } from "lucide-react";
+import { ChevronsUpDown, Printer } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -37,13 +37,15 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { CourseGroups } from "@/components/app/CourseGroups";
+import { branchesForUser } from "@/lib/access";
 import { api } from "@/lib/api";
 import {
   formatCourseYear,
   getCourseDuration,
   getCurrentCourseYear,
 } from "@/lib/course-duration";
-import { money, today } from "@/lib/format";
+import { admissionYear, displayDate, money, today } from "@/lib/format";
 import { printPage } from "@/lib/print";
 import { cn } from "@/lib/utils";
 import type {
@@ -58,15 +60,6 @@ import {
   OutstandingPrint,
   type OutstandingPrintRow,
 } from "./OutstandingPrint";
-
-function displayDate(value: string) {
-  const [year, month, day] = value.split("-");
-  return year && month && day ? `${day}/${month}/${year}` : value;
-}
-
-function admissionYear(row: OutstandingRow) {
-  return row.admission_date.slice(0, 4);
-}
 
 function emptyFee(): OutstandingFeeBreakdown {
   return { due: 0, paid: 0, pending: 0 };
@@ -173,10 +166,7 @@ export function Outstanding({
   const [courseId, setCourseId] = useState("");
   const [admissionYearValue, setAdmissionYearValue] = useState("");
   const [courseOpen, setCourseOpen] = useState(false);
-  const allowedBranches =
-    me.role === "admin"
-      ? branches
-      : branches.filter((branch) => branch.id === me.branch_id);
+  const allowedBranches = branchesForUser(me, branches);
   const branchCourseGroups = allowedBranches
     .map((branch) => ({
       branch,
@@ -332,46 +322,15 @@ export function Outstanding({
                 className="w-auto min-w-[var(--radix-popover-trigger-width)] p-0"
                 align="start"
               >
-                {branchCourseGroups.length === 0 ? (
-                  <div className="px-2 py-6 text-center text-sm text-muted-foreground">
-                    No results found
-                  </div>
-                ) : (
-                  <div className="flex divide-x">
-                    {branchCourseGroups.map(({ branch, branchCourses }) => (
-                      <div key={branch.id} className="min-w-40 flex-1 p-1">
-                        <div className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground">
-                          {branch.name}
-                        </div>
-                        {branchCourses.map((course) => (
-                          <button
-                            key={course.id}
-                            type="button"
-                            className={cn(
-                              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent",
-                              courseId === course.id && "bg-accent",
-                            )}
-                            onClick={() => {
-                              setCourseId(course.id);
-                              setAdmissionYearValue("");
-                              setCourseOpen(false);
-                            }}
-                          >
-                            <Check
-                              className={cn(
-                                "size-4 shrink-0",
-                                courseId === course.id
-                                  ? "opacity-100"
-                                  : "opacity-0",
-                              )}
-                            />
-                            <span className="truncate">{course.name}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <CourseGroups
+                  groups={branchCourseGroups}
+                  selectedCourseId={courseId}
+                  onSelect={(nextCourseId) => {
+                    setCourseId(nextCourseId);
+                    setAdmissionYearValue("");
+                    setCourseOpen(false);
+                  }}
+                />
               </PopoverContent>
             </Popover>
           </div>

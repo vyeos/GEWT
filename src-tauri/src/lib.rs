@@ -86,6 +86,10 @@ fn branch_filter(session: &Session) -> Option<String> {
 }
 
 fn ensure_feature(session: &Session, feature: &str) -> Result<(), String> {
+    // Admins always have every page; the per-page flags only scope employees.
+    if session.role == "admin" {
+        return Ok(());
+    }
     let allowed = match feature {
         "admission" => session.can_admission,
         "receipt" => session.can_receipt,
@@ -102,7 +106,11 @@ fn ensure_feature(session: &Session, feature: &str) -> Result<(), String> {
 }
 
 fn ensure_student_read_access(session: &Session) -> Result<(), String> {
-    if session.can_receipt || session.can_students || session.can_promote {
+    if session.role == "admin"
+        || session.can_receipt
+        || session.can_students
+        || session.can_promote
+    {
         Ok(())
     } else {
         Err("You don't have access to this page".to_string())
@@ -1336,6 +1344,48 @@ mod smoke_tests {
         Ok(())
     }
 
+    // A database created by an older version still carries the unused
+    // current_course_year column; the schema migration must drop it on the next
+    // launch without losing student data.
+    async fn legacy_current_course_year_column_is_dropped_run() -> Result<(), String> {
+        let tmp = std::env::temp_dir().join(format!("gewt-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db_path = db::db_file(&tmp);
+
+        // Simulate a pre-existing database that still carries the legacy column.
+        {
+            let pool = db::init_db(&tmp).await?;
+            sqlx::query(
+                "ALTER TABLE students ADD COLUMN current_course_year INTEGER NOT NULL DEFAULT 1 CHECK (current_course_year BETWEEN 1 AND 4)",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+            let course = db::create_course(&pool, course_req(PRT, "Legacy")).await?;
+            db::create_student(
+                &pool,
+                student_req(PRT, &course.id, "2026-09-01", 1000.0),
+                ADMIN,
+            )
+            .await?;
+            pool.close().await;
+        }
+
+        // Re-open: migrate_schema should drop the legacy column without data loss.
+        let pool = db::open_pool(&db_path, false).await?;
+        let has_col: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('students') WHERE name = 'current_course_year'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        assert_eq!(has_col, 0, "legacy current_course_year column should be dropped");
+        let students = db::list_students(&pool, Some(PRT), true).await?;
+        assert_eq!(students.len(), 1, "student survives the column drop");
+
+        Ok(())
+    }
+
     #[derive(Clone)]
     struct FlowStudent {
         id: String,
@@ -2544,6 +2594,12 @@ mod smoke_tests {
     fn course_duration_is_capped() {
         tauri::async_runtime::block_on(course_duration_is_capped_run())
             .expect("course duration cap test failed");
+    }
+
+    #[test]
+    fn legacy_current_course_year_column_is_dropped() {
+        tauri::async_runtime::block_on(legacy_current_course_year_column_is_dropped_run())
+            .expect("legacy current_course_year drop test failed");
     }
 
     #[test]

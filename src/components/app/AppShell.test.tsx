@@ -12,21 +12,24 @@ vi.mock("@/lib/updater", () => ({
 }));
 
 function renderShell(me: Me, screen: Screen = "admission") {
-  return {
+  const handlers = {
     onScreenChange: vi.fn(),
     onThemeChange: vi.fn(),
     onRefresh: vi.fn(),
     onLogout: vi.fn(),
+  };
+  return {
+    ...handlers,
     ...render(
       <AppShell
         me={me}
         screen={screen}
         loading={false}
         isDarkMode={false}
-        onScreenChange={vi.fn()}
-        onThemeChange={vi.fn()}
-        onRefresh={vi.fn()}
-        onLogout={vi.fn()}
+        onScreenChange={handlers.onScreenChange}
+        onThemeChange={handlers.onThemeChange}
+        onRefresh={handlers.onRefresh}
+        onLogout={handlers.onLogout}
       >
         <div>Screen body</div>
       </AppShell>,

@@ -154,7 +154,6 @@ async fn create_schema(pool: &SqlitePool) -> DbResult<()> {
             other_fee_year_2 REAL NOT NULL DEFAULT 0,
             other_fee_year_3 REAL NOT NULL DEFAULT 0,
             other_fee_year_4 REAL NOT NULL DEFAULT 0,
-            current_course_year INTEGER NOT NULL DEFAULT 1 CHECK (current_course_year BETWEEN 1 AND 4),
             current_course_period INTEGER NOT NULL DEFAULT 1 CHECK (current_course_period BETWEEN 1 AND 8),
             admission_cancelled INTEGER NOT NULL DEFAULT 0,
             admission_cancelled_at TEXT,
@@ -311,6 +310,25 @@ async fn migrate_schema(pool: &SqlitePool) -> DbResult<()> {
         .execute(pool)
         .await
         .map_err(|e| e.to_string())?;
+
+    // current_course_year was stored but never read — the current year is always
+    // derived from current_course_period. Drop it from databases that still
+    // carry it. Best-effort: a SQLite build that can't drop the column leaves a
+    // harmless orphan column rather than blocking startup.
+    let has_course_year: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('students') WHERE name = 'current_course_year'",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    if has_course_year > 0 {
+        if let Err(e) = sqlx::query("ALTER TABLE students DROP COLUMN current_course_year")
+            .execute(pool)
+            .await
+        {
+            eprintln!("GEWT: could not drop legacy current_course_year column: {e}");
+        }
+    }
 
     // Rename the original Prantij default code for existing databases, but
     // only when it still has the old untouched value and PRJ is available.
@@ -1810,8 +1828,8 @@ pub async fn create_student(
     sqlx::query(
         "INSERT INTO students (id, form_seq, form_year, form_no, admission_date, branch_id, course_id, student_name, surname, father_name, category, religion, caste, gender, aadhar, address, district, taluka, pincode, student_phone, parent_phone, photo,
             fee_year_1, fee_year_2, fee_year_3, fee_year_4, tuition_fee_year_1, tuition_fee_year_2, tuition_fee_year_3, tuition_fee_year_4, other_fee_year_1, other_fee_year_2, other_fee_year_3, other_fee_year_4,
-            current_course_year, current_course_period, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?)",
+            current_course_period, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
     )
     .bind(&id)
     .bind(seq)
@@ -1886,11 +1904,10 @@ pub async fn update_student(pool: &SqlitePool, id: &str, req: StudentRequest) ->
         &course,
     )?;
     ensure_passed_year_fees_unchanged(&existing, &fees, period)?;
-    let year = current_course_year_from_period(period);
 
     // Form numbering is assigned once at admission and never changes on edit.
     sqlx::query(
-        "UPDATE students SET admission_date = ?, course_id = ?, current_course_year = ?, current_course_period = ?,
+        "UPDATE students SET admission_date = ?, course_id = ?, current_course_period = ?,
             student_name = ?, surname = ?, father_name = ?, category = ?, religion = ?, caste = ?, gender = ?, aadhar = ?, address = ?, district = ?, taluka = ?, pincode = ?, student_phone = ?, parent_phone = ?, photo = ?,
             fee_year_1 = ?, fee_year_2 = ?, fee_year_3 = ?, fee_year_4 = ?, tuition_fee_year_1 = ?, tuition_fee_year_2 = ?, tuition_fee_year_3 = ?, tuition_fee_year_4 = ?,
             other_fee_year_1 = ?, other_fee_year_2 = ?, other_fee_year_3 = ?, other_fee_year_4 = ?, updated_at = ?
@@ -1898,7 +1915,6 @@ pub async fn update_student(pool: &SqlitePool, id: &str, req: StudentRequest) ->
     )
     .bind(&req.admission_date)
     .bind(&req.course_id)
-    .bind(year)
     .bind(period)
     .bind(req.student_name.trim())
     .bind(req.surname.trim())
@@ -2009,7 +2025,6 @@ pub async fn promote_students(pool: &SqlitePool, req: PromoteRequest) -> DbResul
     let update_sql = format!(
         "UPDATE students
          SET current_course_period = current_course_period + 1,
-             current_course_year = (current_course_period + 2) / 2,
              updated_at = ?
          WHERE id IN ({in_clause}) AND current_course_period < ?"
     );

@@ -1,7 +1,6 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
-  Check,
   ChevronsUpDown,
   Printer,
   Save,
@@ -46,15 +45,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { CourseGroups } from "@/components/app/CourseGroups";
 import { StudentPhotoField } from "@/components/app/StudentPhotoField";
 import { api } from "@/lib/api";
 import {
   formatCoursePeriod,
   formatCourseYear,
+  formatPeriodLabel,
   getCourseDuration,
   getCurrentCourseYear,
 } from "@/lib/course-duration";
-import { money } from "@/lib/format";
+import { admissionYear, money } from "@/lib/format";
 import { printPage } from "@/lib/print";
 import { cn } from "@/lib/utils";
 import type { Branch, Course, Me, Student } from "@/types";
@@ -155,10 +156,6 @@ function toForm(student: Student): StudentForm {
   };
 }
 
-function admissionYear(student: Student) {
-  return student.admission_date.slice(0, 4);
-}
-
 function feeField(type: "fee" | "tuition" | "other", year: number) {
   return `${
     type === "fee" ? "fee" : `${type}_fee`
@@ -169,10 +166,6 @@ function numberValue(value: string) {
   // Fees are whole rupees only.
   const parsed = Math.floor(Number(value));
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
-}
-
-function formatPeriodForCourse(course: Course, period: number) {
-  return `${course.duration_type === "semester" ? "Semester" : "Term"} ${period}`;
 }
 
 export function Students({
@@ -366,9 +359,6 @@ export function Students({
       student_phone: form.student_phone,
       parent_phone: form.parent_phone,
       photo: form.photo,
-      yearly_fee: form.fee_year_1,
-      tuition_fee: form.tuition_fee_year_1,
-      other_fee: form.other_fee_year_1,
     });
   }
 
@@ -629,7 +619,7 @@ export function Students({
                       {detailPeriods.map((period) => (
                         <SelectItem key={period} value={String(period)}>
                           {detailsCourse
-                            ? formatPeriodForCourse(detailsCourse, period)
+                            ? formatPeriodLabel(detailsCourse.duration_type, period)
                             : period}
                         </SelectItem>
                       ))}
@@ -1073,55 +1063,6 @@ export function Students({
           )}
         </CardContent>
       </Card>
-    </div>
-  );
-}
-
-function CourseGroups({
-  groups,
-  selectedCourseId,
-  onSelect,
-}: {
-  groups: { branch: Branch; branchCourses: Course[] }[];
-  selectedCourseId: string;
-  onSelect: (courseId: string) => void;
-}) {
-  if (groups.length === 0) {
-    return (
-      <div className="px-2 py-6 text-center text-sm text-muted-foreground">
-        No results found
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex divide-x">
-      {groups.map(({ branch, branchCourses }) => (
-        <div key={branch.id} className="min-w-40 flex-1 p-1">
-          <div className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground">
-            {branch.name}
-          </div>
-          {branchCourses.map((course) => (
-            <button
-              key={course.id}
-              type="button"
-              className={cn(
-                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent",
-                selectedCourseId === course.id && "bg-accent",
-              )}
-              onClick={() => onSelect(course.id)}
-            >
-              <Check
-                className={cn(
-                  "size-4 shrink-0",
-                  selectedCourseId === course.id ? "opacity-100" : "opacity-0",
-                )}
-              />
-              <span className="truncate">{course.name}</span>
-            </button>
-          ))}
-        </div>
-      ))}
     </div>
   );
 }

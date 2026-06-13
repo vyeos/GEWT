@@ -360,6 +360,9 @@ export function Utility({
     event.preventDefault();
     try {
       const path = editingUserId ? `/users/${editingUserId}` : "/users";
+      // Admins always have every page, so their per-page flags are forced on
+      // (the checkboxes are hidden for admins in the dialog).
+      const isAdmin = userForm.role === "admin";
       await api<User>(path, token, {
         method: editingUserId ? "PATCH" : "POST",
         body: JSON.stringify({
@@ -372,11 +375,11 @@ export function Utility({
               : null,
           password: userForm.password || null,
           active: userForm.active,
-          can_admission: userForm.can_admission,
-          can_receipt: userForm.can_receipt,
-          can_outstanding: userForm.can_outstanding,
-          can_students: userForm.can_students,
-          can_promote: userForm.can_promote,
+          can_admission: isAdmin || userForm.can_admission,
+          can_receipt: isAdmin || userForm.can_receipt,
+          can_outstanding: isAdmin || userForm.can_outstanding,
+          can_students: isAdmin || userForm.can_students,
+          can_promote: isAdmin || userForm.can_promote,
         }),
       });
       toast.success(editingUserId ? "User updated" : "User created");
@@ -959,17 +962,23 @@ export function Utility({
                                   <Badge variant="destructive">Inactive</Badge>
                                 )}
                               </div>
-                              <div className="flex flex-wrap gap-1">
-                                {accessLabels.map((label) => (
-                                  <Badge
-                                    key={label}
-                                    variant="outline"
-                                    className="text-xs"
-                                  >
-                                    {label}
-                                  </Badge>
-                                ))}
-                              </div>
+                              {user.role === "admin" ? (
+                                <span className="text-xs text-muted-foreground">
+                                  All pages
+                                </span>
+                              ) : (
+                                <div className="flex flex-wrap gap-1">
+                                  {accessLabels.map((label) => (
+                                    <Badge
+                                      key={label}
+                                      variant="outline"
+                                      className="text-xs"
+                                    >
+                                      {label}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           </TableCell>
                           <TableCell>
@@ -1101,30 +1110,39 @@ export function Utility({
                     </div>
                   )}
                 </div>
-                <div className="flex flex-col gap-3 rounded-md border p-3">
-                  <div>
+                {userForm.role === "admin" ? (
+                  <div className="rounded-md border p-3">
                     <Label>Page access</Label>
                     <p className="text-xs text-muted-foreground">
-                      The user will only see checked pages in the sidebar.
+                      Admins always have access to every page.
                     </p>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {PAGE_ACCESS.map((item) => (
-                      <label
-                        key={item.field}
-                        className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
-                      >
-                        <Checkbox
-                          checked={userForm[item.field]}
-                          onCheckedChange={(checked) =>
-                            togglePageAccess(item.field, checked === true)
-                          }
-                        />
-                        <span>{item.label}</span>
-                      </label>
-                    ))}
+                ) : (
+                  <div className="flex flex-col gap-3 rounded-md border p-3">
+                    <div>
+                      <Label>Page access</Label>
+                      <p className="text-xs text-muted-foreground">
+                        The user will only see checked pages in the sidebar.
+                      </p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {PAGE_ACCESS.map((item) => (
+                        <label
+                          key={item.field}
+                          className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+                        >
+                          <Checkbox
+                            checked={userForm[item.field]}
+                            onCheckedChange={(checked) =>
+                              togglePageAccess(item.field, checked === true)
+                            }
+                          />
+                          <span>{item.label}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
                 <div className="flex flex-col gap-2">
                   <Label>{editingUserId ? "New password" : "Password"}</Label>
                   <Input

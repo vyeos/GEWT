@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronsUpDown, GraduationCap } from "lucide-react";
+import { ChevronsUpDown, GraduationCap } from "lucide-react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -37,6 +37,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { CourseGroups } from "@/components/app/CourseGroups";
+import { branchesForUser } from "@/lib/access";
 import { api } from "@/lib/api";
 import {
   formatCourseYear,
@@ -45,7 +47,7 @@ import {
   getCurrentCoursePeriod,
   getCurrentCourseYear,
 } from "@/lib/course-duration";
-import { cn } from "@/lib/utils";
+import { admissionYear } from "@/lib/format";
 import type { Branch, Course, Me, Student } from "@/types";
 
 type PromoteResponse = {
@@ -53,10 +55,6 @@ type PromoteResponse = {
   skipped_count: number;
   students: Student[];
 };
-
-function admissionYear(student: Student) {
-  return student.admission_date.slice(0, 4);
-}
 
 export function Promote({
   token,
@@ -80,10 +78,7 @@ export function Promote({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isPromoting, setIsPromoting] = useState(false);
-  const allowedBranches =
-    me.role === "admin"
-      ? branches
-      : branches.filter((branch) => branch.id === me.branch_id);
+  const allowedBranches = branchesForUser(me, branches);
   const branchCourseGroups = allowedBranches
     .map((branch) => ({
       branch,
@@ -257,47 +252,16 @@ export function Promote({
                 className="w-auto min-w-[var(--radix-popover-trigger-width)] p-0"
                 align="start"
               >
-                {branchCourseGroups.length === 0 ? (
-                  <div className="px-2 py-6 text-center text-sm text-muted-foreground">
-                    No results found
-                  </div>
-                ) : (
-                  <div className="flex divide-x">
-                    {branchCourseGroups.map(({ branch, branchCourses }) => (
-                      <div key={branch.id} className="min-w-40 flex-1 p-1">
-                        <div className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground">
-                          {branch.name}
-                        </div>
-                        {branchCourses.map((course) => (
-                          <button
-                            key={course.id}
-                            type="button"
-                            className={cn(
-                              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent",
-                              courseId === course.id && "bg-accent",
-                            )}
-                            onClick={() => {
-                              setCourseId(course.id);
-                              setAdmissionYearValue("");
-                              setSelectedIds(new Set());
-                              setCourseOpen(false);
-                            }}
-                          >
-                            <Check
-                              className={cn(
-                                "size-4 shrink-0",
-                                courseId === course.id
-                                  ? "opacity-100"
-                                  : "opacity-0",
-                              )}
-                            />
-                            <span className="truncate">{course.name}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <CourseGroups
+                  groups={branchCourseGroups}
+                  selectedCourseId={courseId}
+                  onSelect={(nextCourseId) => {
+                    setCourseId(nextCourseId);
+                    setAdmissionYearValue("");
+                    setSelectedIds(new Set());
+                    setCourseOpen(false);
+                  }}
+                />
               </PopoverContent>
             </Popover>
           </div>

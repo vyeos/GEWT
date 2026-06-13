@@ -8,6 +8,22 @@ export function today() {
   return `${year}-${month}-${day}`;
 }
 
+// Render a stored YYYY-MM-DD date as DD/MM/YYYY for documents and tables.
+export function displayDate(value: string) {
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${day}/${month}/${year}` : value;
+}
+
+// The calendar-year prefix of an admission date (YYYY-MM-DD), used to group
+// students by admission year across the promote/outstanding/students screens.
+export function admissionYear(record: { admission_date: string }): string {
+  return record.admission_date.slice(0, 4);
+}
+
+export function uppercase(value: string): string {
+  return value.toUpperCase();
+}
+
 export function money(value: number) {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",

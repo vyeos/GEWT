@@ -134,9 +134,6 @@ function admissionHtml(payload: AdmissionPayload) {
         student_phone: payload.student.student_phone,
         parent_phone: payload.student.parent_phone,
         photo: payload.student.photo,
-        yearly_fee: payload.student.fee_year_1,
-        tuition_fee: payload.student.tuition_fee_year_1,
-        other_fee: payload.student.other_fee_year_1,
       }}
       course={payload.course}
       branch={payload.branch}

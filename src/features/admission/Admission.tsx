@@ -1,9 +1,5 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import {
-  Check,
-  ChevronsUpDown,
-  Printer,
-} from "lucide-react";
+import { ChevronsUpDown, Printer } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,12 +19,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { CourseGroups } from "@/components/app/CourseGroups";
 import { StudentPhotoField } from "@/components/app/StudentPhotoField";
+import { branchesForUser } from "@/lib/access";
 import { api, previewFormNo } from "@/lib/api";
 import { getCourseDuration } from "@/lib/course-duration";
 import { money, today } from "@/lib/format";
 import { printPage } from "@/lib/print";
-import { cn } from "@/lib/utils";
 import type { Branch, Course, Me, Student } from "@/types";
 import { AdmissionPrint, type PrintableAdmission } from "./AdmissionPrint";
 
@@ -47,10 +44,7 @@ export function Admission({
   courses: Course[];
   onSaved: () => void;
 }) {
-  const allowedBranches =
-    me.role === "admin"
-      ? branches
-      : branches.filter((branch) => branch.id === me.branch_id);
+  const allowedBranches = branchesForUser(me, branches);
   const initialForm = (form_no = "") => ({
     form_no,
     admission_date: today(),
@@ -83,9 +77,6 @@ export function Admission({
   );
   const [printCourse, setPrintCourse] = useState<Course | undefined>(undefined);
   const [printBranch, setPrintBranch] = useState<Branch | undefined>(undefined);
-  // Set by the "Save & print" button so the shared submit handler knows whether
-  // to open the print dialog after a successful save.
-  const shouldPrintRef = useRef(false);
   const printAfterRenderRef = useRef(false);
   // When a print is in flight we defer onSaved()'s global refresh until after
   // window.print() has fired, so the refetch doesn't re-render the tree out
@@ -160,8 +151,6 @@ export function Admission({
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (isSaving) return;
-    const print = shouldPrintRef.current;
-    shouldPrintRef.current = false;
     setIsSaving(true);
     try {
       const {
@@ -217,40 +206,34 @@ export function Admission({
         }),
       });
       toast.success(`Admitted Student #${savedStudent.form_no}`);
-      if (print) {
-        setPrintCourse(selectedCourse);
-        setPrintBranch(selectedBranch);
-        setPrintSnapshot({
-          // The number the backend actually assigned, not the preview.
-          form_no: savedStudent.form_no,
-          admission_date: form.admission_date,
-          surname,
-          student_name,
-          father_name,
-          category: form.category,
-          religion: form.religion,
-          caste: form.caste,
-          gender: form.gender,
-          aadhar: form.aadhar,
-          address: form.address,
-          district: form.district,
-          taluka: form.taluka,
-          pincode: form.pincode,
-          student_phone: form.student_phone,
-          parent_phone: form.parent_phone,
-          photo: form.photo,
-          yearly_fee,
-          tuition_fee,
-          other_fee,
-        });
-        printAfterRenderRef.current = true;
-        refreshAfterPrintRef.current = true;
-      }
+      setPrintCourse(selectedCourse);
+      setPrintBranch(selectedBranch);
+      setPrintSnapshot({
+        // The number the backend actually assigned, not the preview.
+        form_no: savedStudent.form_no,
+        admission_date: form.admission_date,
+        surname,
+        student_name,
+        father_name,
+        category: form.category,
+        religion: form.religion,
+        caste: form.caste,
+        gender: form.gender,
+        aadhar: form.aadhar,
+        address: form.address,
+        district: form.district,
+        taluka: form.taluka,
+        pincode: form.pincode,
+        student_phone: form.student_phone,
+        parent_phone: form.parent_phone,
+        photo: form.photo,
+      });
+      printAfterRenderRef.current = true;
+      // onSaved()'s global refresh runs after window.print() (see the print
+      // effect) so the refetch doesn't disrupt the print dialog.
+      refreshAfterPrintRef.current = true;
       setForm(initialForm());
       void loadNextFormNo();
-      // When printing, onSaved() runs after window.print() (see the print
-      // effect) so the global refresh doesn't disrupt the print dialog.
-      if (!print) onSaved();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Admission failed");
     } finally {
@@ -356,49 +339,21 @@ export function Admission({
                   className="w-auto min-w-[var(--radix-popover-trigger-width)] p-0"
                   align="start"
                 >
-                  {branchCourseGroups.length === 0 ? (
-                    <div className="px-2 py-6 text-center text-sm text-muted-foreground">
-                      No results found
-                    </div>
-                  ) : (
-                    <div className="flex divide-x">
-                      {branchCourseGroups.map(({ branch, branchCourses }) => (
-                        <div key={branch.id} className="min-w-40 flex-1 p-1">
-                          <div className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground">
-                            {branch.name}
-                          </div>
-                          {branchCourses.map((course) => (
-                            <button
-                              key={course.id}
-                              type="button"
-                              className={cn(
-                                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent",
-                                form.course_id === course.id && "bg-accent",
-                              )}
-                              onClick={() => {
-                                setForm({
-                                  ...form,
-                                  course_id: course.id,
-                                  branch_id: course.branch_id,
-                                });
-                                setCourseOpen(false);
-                              }}
-                            >
-                              <Check
-                                className={cn(
-                                  "size-4 shrink-0",
-                                  form.course_id === course.id
-                                    ? "opacity-100"
-                                    : "opacity-0",
-                                )}
-                              />
-                              {course.name}
-                            </button>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <CourseGroups
+                    groups={branchCourseGroups}
+                    selectedCourseId={form.course_id}
+                    onSelect={(nextCourseId) => {
+                      const nextCourse = courses.find(
+                        (course) => course.id === nextCourseId,
+                      );
+                      setForm({
+                        ...form,
+                        course_id: nextCourseId,
+                        branch_id: nextCourse?.branch_id ?? form.branch_id,
+                      });
+                      setCourseOpen(false);
+                    }}
+                  />
                 </PopoverContent>
               </Popover>
             </div>
@@ -636,13 +591,7 @@ export function Admission({
           </div>
 
           <div className="flex justify-end gap-2">
-            <Button
-              type="submit"
-              disabled={isSaving}
-              onClick={() => {
-                shouldPrintRef.current = true;
-              }}
-            >
+            <Button type="submit" disabled={isSaving}>
               <Printer className="size-4" />
               {isSaving ? "Saving..." : "Save & print"}
             </Button>

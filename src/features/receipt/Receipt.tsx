@@ -44,6 +44,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { paymentModes } from "@/data/seeds";
+import { branchesForUser } from "@/lib/access";
 import { api, previewReceiptNo } from "@/lib/api";
 import {
   formatCoursePeriod,
@@ -108,10 +109,7 @@ export function Receipt({
   const [cancelTarget, setCancelTarget] = useState<StudentReceipt | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
   const requiresRef = mode !== "Cash";
-  const allowedBranches =
-    me.role === "admin"
-      ? branches
-      : branches.filter((branch) => branch.id === me.branch_id);
+  const allowedBranches = branchesForUser(me, branches);
   const selectedCourse = courses.find((course) => course.id === courseId);
   const branchCourseGroups = allowedBranches
     .map((branch) => ({
@@ -273,15 +271,15 @@ export function Receipt({
     for (const [feeTypeOrder, group] of feeGroups.entries()) {
       let paid = paidByType.get(group.feeType) ?? 0;
       for (const period of periods) {
-        if ((period.semester ?? period.year) > currentPeriod) break;
+        if (period.semester > currentPeriod) break;
         const yearlyFee = group.fees[period.year - 1] ?? 0;
-        const periodFee = period.semester ? yearlyFee / 2 : yearlyFee;
+        const periodFee = yearlyFee / 2;
         const deduct = Math.min(paid, periodFee);
         paid -= deduct;
         rows.push({
           feeType: group.feeType,
           period: period.label,
-          periodOrder: period.semester ?? period.year,
+          periodOrder: period.semester,
           feeTypeOrder,
           total: periodFee,
           pending: periodFee - deduct,

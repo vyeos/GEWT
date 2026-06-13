@@ -3,11 +3,25 @@ import { canAccessScreen, firstAccessibleScreen, pageAccessLabels } from "@/lib/
 import { makeMe, makeUser } from "@/test/factories";
 
 describe("access helpers", () => {
-  it("uses per-page access flags for operational pages", () => {
-    const user = makeUser({ can_receipt: false });
+  it("uses per-page access flags for employees", () => {
+    const user = makeUser({ role: "employee", can_receipt: false });
 
     expect(canAccessScreen(user, "admission")).toBe(true);
     expect(canAccessScreen(user, "receipt")).toBe(false);
+  });
+
+  it("gives admins every page regardless of per-page flags", () => {
+    const admin = makeUser({
+      role: "admin",
+      can_admission: false,
+      can_receipt: false,
+      can_students: false,
+    });
+
+    expect(canAccessScreen(admin, "admission")).toBe(true);
+    expect(canAccessScreen(admin, "receipt")).toBe(true);
+    expect(canAccessScreen(admin, "students")).toBe(true);
+    expect(canAccessScreen(admin, "utility")).toBe(true);
   });
 
   it("keeps utility admin-only and backup open to signed-in users", () => {
@@ -25,8 +39,11 @@ describe("access helpers", () => {
       can_promote: false,
     };
 
-    expect(firstAccessibleScreen(makeMe({ can_admission: false }))).toBe("receipt");
-    expect(firstAccessibleScreen(makeMe({ role: "admin", ...noPageAccess }))).toBe("utility");
+    expect(firstAccessibleScreen(makeMe({ role: "employee", can_admission: false }))).toBe(
+      "receipt",
+    );
+    // Admins always land on the first page; their flags never gate them.
+    expect(firstAccessibleScreen(makeMe({ role: "admin", ...noPageAccess }))).toBe("admission");
     expect(firstAccessibleScreen(makeMe({ role: "employee", ...noPageAccess }))).toBe("backup");
   });
 

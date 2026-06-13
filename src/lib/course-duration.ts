@@ -6,7 +6,9 @@ type CourseDurationSource =
 
 export type CourseBillingPeriod = {
   year: number;
-  semester: number | null;
+  // Every billed period is half a year, so even year-type courses bill in two
+  // "Term" periods per year; this is always a positive period index.
+  semester: number;
   label: string;
 };
 
@@ -102,6 +104,10 @@ export function formatCourseYear(year: number) {
   return `${ordinal(year)} Year`;
 }
 
+export function formatPeriodLabel(durationType: string, period: number) {
+  return `${durationType === "semester" ? "Semester" : "Term"} ${period}`;
+}
+
 export function formatCoursePeriod(student: Student, period: number) {
-  return `${student.course_duration_type === "semester" ? "Semester" : "Term"} ${period}`;
+  return formatPeriodLabel(student.course_duration_type, period);
 }

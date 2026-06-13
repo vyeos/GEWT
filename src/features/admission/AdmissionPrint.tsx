@@ -1,5 +1,6 @@
 import { createPortal } from "react-dom";
 import { PrintPage } from "@/components/print/PrintPage";
+import { displayDate, uppercase } from "@/lib/format";
 import type { Branch, Course } from "@/types";
 
 export type PrintableAdmission = {
@@ -20,9 +21,6 @@ export type PrintableAdmission = {
   student_phone: string;
   parent_phone: string;
   photo: string;
-  yearly_fee: number;
-  tuition_fee: number;
-  other_fee: number;
 };
 
 export function AdmissionPrint({
@@ -131,15 +129,6 @@ export function AdmissionPrint({
     </div>,
     document.body,
   );
-}
-
-function displayDate(value: string) {
-  const [year, month, day] = value.split("-");
-  return year && month && day ? `${day}/${month}/${year}` : value;
-}
-
-function uppercase(value: string) {
-  return value.toUpperCase();
 }
 
 function LineField({ label, value }: { label: string; value: string }) {

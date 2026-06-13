@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { amountInWords, today } from "@/lib/format";
+import { amountInWords, displayDate, uppercase } from "@/lib/format";
 import {
   formatCoursePeriod,
   formatCourseYear,
@@ -62,7 +62,7 @@ export function ReceiptPrint({
               {receipt.original ? "Original Copy" : "Duplicate Copy"}
             </div>
             <div className="text-right">
-              Date. : <span>{displayDate(today())}</span>
+              Date. : <span>{displayDate(receipt.receipt_date)}</span>
             </div>
           </div>
 
@@ -112,21 +112,12 @@ export function ReceiptPrint({
   );
 }
 
-function displayDate(value: string) {
-  const [year, month, day] = value.split("-");
-  return year && month && day ? `${day}/${month}/${year}` : value;
-}
-
 function amountNumber(value: number) {
   return (value || 0).toFixed(2);
 }
 
 function receiptWords(value: number) {
   return amountInWords(value).replace(/^Rupees\s+/i, "");
-}
-
-function uppercase(value: string) {
-  return value.toUpperCase();
 }
 
 function UnderlinedValue({ value }: { value: string }) {
