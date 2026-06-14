@@ -2178,6 +2178,9 @@ pub async fn create_receipt(
         return Err("Reference number is required for this payment mode".to_string());
     }
     let student = load_student(pool, &req.student_id).await?;
+    if student.branch_id != branch_id {
+        return Err("Receipt branch must match the student's branch".to_string());
+    }
     let pending = pending_for_fee_type(pool, &student, &req.fee_type).await?;
     if req.amount_paid > pending + 0.01 {
         return Err(format!(

@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub type BackupResult<T> = Result<T, String>;
@@ -470,6 +470,7 @@ pub async fn import_backup(
             backup.schema_version
         ));
     }
+    validate_backup_payload(&backup)?;
     if let Some(branch) = restrict_branch {
         if backup.branch_ids.iter().any(|b| b != branch) || backup.branch_ids.is_empty() {
             return Err("You can only import a backup for your own branch".to_string());
@@ -669,6 +670,90 @@ pub async fn import_backup(
         receipts: backup.data.receipts.len(),
         courses: backup.data.courses.len(),
     })
+}
+
+fn validate_backup_payload(backup: &Backup) -> BackupResult<()> {
+    if backup.branch_ids.is_empty() {
+        return Err("Backup does not contain any branches".to_string());
+    }
+
+    let branch_ids: HashSet<&str> = backup.branch_ids.iter().map(String::as_str).collect();
+    if branch_ids.len() != backup.branch_ids.len() {
+        return Err("Backup contains duplicate branches".to_string());
+    }
+    if !(1..=12).contains(&backup.config.academic_settings.academic_year_start_month) {
+        return Err("Backup contains invalid academic settings".to_string());
+    }
+    for branch in &backup.config.branches {
+        if !branch_ids.contains(branch.id.as_str()) {
+            return Err("Backup contains branch config outside selected branches".to_string());
+        }
+    }
+
+    let mut course_branches: HashMap<&str, &str> = HashMap::new();
+    for course in &backup.data.courses {
+        if !branch_ids.contains(course.branch_id.as_str()) {
+            return Err("Backup contains course data outside selected branches".to_string());
+        }
+        course_branches.insert(course.id.as_str(), course.branch_id.as_str());
+    }
+
+    let mut student_branches: HashMap<&str, &str> = HashMap::new();
+    for student in &backup.data.students {
+        if !branch_ids.contains(student.branch_id.as_str()) {
+            return Err("Backup contains student data outside selected branches".to_string());
+        }
+        if course_branches.get(student.course_id.as_str()).copied()
+            != Some(student.branch_id.as_str())
+        {
+            return Err(
+                "Backup contains student data with a missing or cross-branch course".to_string(),
+            );
+        }
+        student_branches.insert(student.id.as_str(), student.branch_id.as_str());
+    }
+
+    for receipt in &backup.data.receipts {
+        if !branch_ids.contains(receipt.branch_id.as_str()) {
+            return Err("Backup contains receipt data outside selected branches".to_string());
+        }
+        if student_branches.get(receipt.student_id.as_str()).copied()
+            != Some(receipt.branch_id.as_str())
+        {
+            return Err(
+                "Backup contains receipt data with a missing or cross-branch student".to_string(),
+            );
+        }
+    }
+
+    for sequence in &backup.data.number_sequences {
+        if !branch_ids.contains(sequence.branch_id.as_str()) {
+            return Err("Backup contains numbering data outside selected branches".to_string());
+        }
+    }
+
+    for user in &backup.accounts {
+        match user.role.as_str() {
+            "admin" if user.branch_id.is_none() => {}
+            "employee"
+                if user
+                    .branch_id
+                    .as_deref()
+                    .map(|branch_id| branch_ids.contains(branch_id))
+                    .unwrap_or(false) => {}
+            "admin" => {
+                return Err("Backup contains invalid admin account data".to_string());
+            }
+            "employee" => {
+                return Err(
+                    "Backup contains employee account data outside selected branches".to_string(),
+                );
+            }
+            _ => return Err("Backup contains invalid account role".to_string()),
+        }
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

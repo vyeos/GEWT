@@ -842,11 +842,15 @@ pub fn run() {
 
 #[cfg(test)]
 mod smoke_tests {
+    use super::{
+        branch_filter, ensure_branch, ensure_feature, ensure_student_read_access, Session,
+    };
     use crate::backup;
     use crate::db::{
         self, Branch, Course, CourseRequest, OutstandingRow, PromoteRequest, Receipt,
         ReceiptRequest, Student, StudentRequest,
     };
+    use serde_json::{json, Value};
     use sqlx::SqlitePool;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -908,6 +912,78 @@ mod smoke_tests {
             duration_type: "year".into(),
             letterhead: None,
         }
+    }
+
+    fn employee_session(branch_id: &str) -> Session {
+        Session {
+            user_db_id: "employee-db-id".into(),
+            role: "employee".into(),
+            branch_id: Some(branch_id.into()),
+            can_admission: true,
+            can_receipt: false,
+            can_outstanding: false,
+            can_students: false,
+            can_promote: false,
+        }
+    }
+
+    fn write_backup_json(path: &Path, payload: &Value) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(payload).map_err(|e| e.to_string())?;
+        std::fs::write(path, json).map_err(|e| e.to_string())
+    }
+
+    fn backend_access_helpers_enforce_employee_scope() {
+        let admin = Session {
+            user_db_id: ADMIN.into(),
+            role: "admin".into(),
+            branch_id: None,
+            can_admission: false,
+            can_receipt: false,
+            can_outstanding: false,
+            can_students: false,
+            can_promote: false,
+        };
+        assert_eq!(
+            branch_filter(&admin),
+            None,
+            "admins are not branch-filtered"
+        );
+        assert!(
+            ensure_branch(&admin, HMT).is_ok(),
+            "admins can work across branches"
+        );
+        assert!(
+            ensure_feature(&admin, "receipt").is_ok(),
+            "admin access is not limited by employee page flags"
+        );
+
+        let employee = employee_session(PRT);
+        assert_eq!(
+            branch_filter(&employee).as_deref(),
+            Some(PRT),
+            "employees are scoped to their assigned branch"
+        );
+        assert!(ensure_branch(&employee, PRT).is_ok());
+        assert!(
+            ensure_branch(&employee, HMT).is_err(),
+            "employees cannot cross into another branch"
+        );
+        assert!(ensure_feature(&employee, "admission").is_ok());
+        assert!(
+            ensure_feature(&employee, "receipt").is_err(),
+            "disabled employee page flags are enforced in the backend"
+        );
+        assert!(
+            ensure_student_read_access(&employee).is_err(),
+            "admission-only employees cannot read the student register"
+        );
+
+        let mut receipt_employee = employee_session(PRT);
+        receipt_employee.can_receipt = true;
+        assert!(
+            ensure_student_read_access(&receipt_employee).is_ok(),
+            "receipt access can read students for receipt selection"
+        );
     }
 
     async fn receipt_validation_and_fee_breakdown_run() -> Result<(), String> {
@@ -1022,6 +1098,44 @@ mod smoke_tests {
         Ok(())
     }
 
+    async fn receipt_branch_must_match_student_run() -> Result<(), String> {
+        let (_tmp, pool) = test_pool().await?;
+        let course = db::create_course(&pool, course_req(PRT, "Receipt Branch Guard")).await?;
+        let student = db::create_student(
+            &pool,
+            student_req(PRT, &course.id, "2026-09-01", 1000.0),
+            ADMIN,
+        )
+        .await?;
+
+        let wrong_branch = db::create_receipt(
+            &pool,
+            ReceiptRequest {
+                student_id: student.id.clone(),
+                receipt_date: "2026-09-02".into(),
+                fee_type: "Tuition".into(),
+                amount_paid: 500.0,
+                payment_mode: "Cash".into(),
+                reference_no: None,
+            },
+            HMT,
+            ADMIN,
+        )
+        .await;
+        assert!(
+            wrong_branch.is_err(),
+            "receipts cannot be recorded under a branch other than the student's branch"
+        );
+        assert!(
+            db::list_receipts(&pool, None, Some(&student.id))
+                .await?
+                .is_empty(),
+            "the rejected cross-branch receipt leaves no stored receipt behind"
+        );
+
+        Ok(())
+    }
+
     async fn student_fee_split_validation_run() -> Result<(), String> {
         let (_tmp, pool) = test_pool().await?;
         let course = db::create_course(&pool, course_req(PRT, "Fee Split")).await?;
@@ -1046,6 +1160,89 @@ mod smoke_tests {
         let student = db::create_student(&pool, valid, ADMIN).await?;
         assert_eq!(student.tuition_fee_year_1, 750.0);
         assert_eq!(student.other_fee_year_1, 250.0);
+
+        Ok(())
+    }
+
+    async fn backup_import_rejects_cross_branch_payloads_run() -> Result<(), String> {
+        let (tmp, source) = test_pool().await?;
+        let course = db::create_course(&source, course_req(PRT, "Backup Export Course")).await?;
+        db::create_student(
+            &source,
+            student_req(PRT, &course.id, "2026-09-01", 1000.0),
+            ADMIN,
+        )
+        .await?;
+        let backup_file = tmp.join("prj.gewtbak");
+        backup::export_backup(&source, &[PRT.into()], "admin", &backup_file).await?;
+        let base_payload: Value =
+            serde_json::from_slice(&std::fs::read(&backup_file).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+
+        let (_dest_tmp, dest) = test_pool().await?;
+        let sentinel_course = db::create_course(&dest, course_req(PRT, "Sentinel Course")).await?;
+        let sentinel_student = db::create_student(
+            &dest,
+            student_req(PRT, &sentinel_course.id, "2026-09-03", 1000.0),
+            ADMIN,
+        )
+        .await?;
+
+        let mut out_of_branch_payload = base_payload.clone();
+        let injected_course_id = uuid::Uuid::new_v4().to_string();
+        out_of_branch_payload["data"]["courses"]
+            .as_array_mut()
+            .ok_or("courses missing from backup payload")?
+            .push(json!({
+                "id": injected_course_id,
+                "branch_id": HMT,
+                "name": "Injected HMT Course",
+                "duration": 1,
+                "duration_type": "year",
+                "letterhead": null,
+                "active": 1,
+                "updated_at": "2099-01-01T00:00:00Z"
+            }));
+        let bad_course_file = tmp.join("bad-course.gewtbak");
+        write_backup_json(&bad_course_file, &out_of_branch_payload)?;
+        let bad_course_import = backup::import_backup(&dest, &bad_course_file, Some(PRT)).await;
+        assert!(
+            bad_course_import.is_err(),
+            "restricted imports reject data rows outside the declared branch"
+        );
+        assert!(
+            !db::list_courses(&dest, Some(HMT), true)
+                .await?
+                .iter()
+                .any(|course| course.id == injected_course_id),
+            "the rejected import does not add the out-of-branch course"
+        );
+        assert!(
+            db::load_student(&dest, &sentinel_student.id).await.is_ok(),
+            "the rejected import leaves existing branch data untouched"
+        );
+
+        let mut cross_link_payload = base_payload.clone();
+        cross_link_payload["data"]["students"]
+            .as_array_mut()
+            .and_then(|students| students.first_mut())
+            .and_then(|student| student.as_object_mut())
+            .ok_or("students missing from backup payload")?
+            .insert(
+                "course_id".into(),
+                Value::String("22222222-2222-2222-2222-000000000001".into()),
+            );
+        let bad_student_file = tmp.join("bad-student-course.gewtbak");
+        write_backup_json(&bad_student_file, &cross_link_payload)?;
+        let bad_student_import = backup::import_backup(&dest, &bad_student_file, None).await;
+        assert!(
+            bad_student_import.is_err(),
+            "imports reject students linked to a course from another branch"
+        );
+        assert!(
+            db::load_student(&dest, &sentinel_student.id).await.is_ok(),
+            "failed cross-link imports also leave existing data untouched"
+        );
 
         Ok(())
     }
@@ -2543,6 +2740,11 @@ mod smoke_tests {
     }
 
     #[test]
+    fn backend_access_helpers_enforce_employee_scope_test() {
+        backend_access_helpers_enforce_employee_scope();
+    }
+
+    #[test]
     fn completed_year_fee_lock() {
         tauri::async_runtime::block_on(completed_year_fee_lock_run())
             .expect("completed year fee lock test failed");
@@ -2552,6 +2754,12 @@ mod smoke_tests {
     fn receipt_validation_and_fee_breakdown() {
         tauri::async_runtime::block_on(receipt_validation_and_fee_breakdown_run())
             .expect("receipt validation and fee breakdown test failed");
+    }
+
+    #[test]
+    fn receipt_branch_must_match_student() {
+        tauri::async_runtime::block_on(receipt_branch_must_match_student_run())
+            .expect("receipt branch guard test failed");
     }
 
     #[test]
@@ -2570,6 +2778,12 @@ mod smoke_tests {
     fn academic_year_settings_affect_numbering() {
         tauri::async_runtime::block_on(academic_year_settings_affect_numbering_run())
             .expect("academic year settings test failed");
+    }
+
+    #[test]
+    fn backup_import_rejects_cross_branch_payloads() {
+        tauri::async_runtime::block_on(backup_import_rejects_cross_branch_payloads_run())
+            .expect("backup import branch validation test failed");
     }
 
     #[test]
