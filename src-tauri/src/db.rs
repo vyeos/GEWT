@@ -330,19 +330,48 @@ async fn migrate_schema(pool: &SqlitePool) -> DbResult<()> {
         }
     }
 
-    // Rename the original Prantij default code for existing databases, but
-    // only when it still has the old untouched value and PRJ is available.
-    sqlx::query(
-        "UPDATE branches
-         SET code = 'PRJ', updated_at = ?
-         WHERE id = '11111111-1111-1111-1111-111111111111'
-           AND code = 'PRT'
-           AND NOT EXISTS (SELECT 1 FROM branches WHERE code = 'PRJ')",
+    // Branch codes are fixed because they become part of stored document
+    // numbers. Normalize the seeded branches on startup so older installs that
+    // allowed edits are brought back to the canonical codes.
+    let branch_code_drift: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM branches
+         WHERE (id = '11111111-1111-1111-1111-111111111111' AND code != 'PRJ')
+            OR (id = '22222222-2222-2222-2222-222222222222' AND code != 'HMT')
+            OR (id = '33333333-3333-3333-3333-333333333333' AND code != 'TLD')",
     )
-    .bind(now_rfc3339())
-    .execute(pool)
+    .fetch_one(pool)
     .await
     .map_err(|e| e.to_string())?;
+    if branch_code_drift > 0 {
+        let now = now_rfc3339();
+        for (id, temp_code) in [
+            ("11111111-1111-1111-1111-111111111111", "__GEWT_FIX_PRJ__"),
+            ("22222222-2222-2222-2222-222222222222", "__GEWT_FIX_HMT__"),
+            ("33333333-3333-3333-3333-333333333333", "__GEWT_FIX_TLD__"),
+        ] {
+            sqlx::query("UPDATE branches SET code = ?, updated_at = ? WHERE id = ?")
+                .bind(temp_code)
+                .bind(&now)
+                .bind(id)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        for (id, code) in [
+            ("11111111-1111-1111-1111-111111111111", "PRJ"),
+            ("22222222-2222-2222-2222-222222222222", "HMT"),
+            ("33333333-3333-3333-3333-333333333333", "TLD"),
+        ] {
+            sqlx::query("UPDATE branches SET code = ?, updated_at = ? WHERE id = ?")
+                .bind(code)
+                .bind(&now)
+                .bind(id)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
 
     // Backfill letterheads onto the originally seeded courses, which shipped
     // with letterhead = NULL. Keyed by the stable seed ids so user-renamed
@@ -1160,27 +1189,9 @@ pub async fn list_branches(
     rows.map_err(|e| e.to_string())
 }
 
-/// Admin can rename a branch's code (used in the numbering scheme).
-pub async fn update_branch_code(pool: &SqlitePool, id: &str, code: &str) -> DbResult<Branch> {
-    let code = code.trim();
-    if code.is_empty() {
-        return Err("Branch code is required".to_string());
-    }
-    let result = sqlx::query("UPDATE branches SET code = ?, updated_at = ? WHERE id = ?")
-        .bind(code)
-        .bind(now_rfc3339())
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(friendly_db_error)?;
-    if result.rows_affected() == 0 {
-        return Err("Branch not found".to_string());
-    }
-    sqlx::query_as("SELECT id, code, name FROM branches WHERE id = ?")
-        .bind(id)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| e.to_string())
+/// Branch codes are fixed because they are embedded in issued document numbers.
+pub async fn update_branch_code(_pool: &SqlitePool, _id: &str, _code: &str) -> DbResult<Branch> {
+    Err("Branch codes are fixed and cannot be changed".to_string())
 }
 
 pub async fn list_courses(

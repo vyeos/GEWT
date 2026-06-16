@@ -77,7 +77,6 @@ import {
   listAllCourses,
   setLanDbPath,
   unarchiveCourse,
-  updateBranchCode,
   type BootInfo,
 } from "@/lib/api";
 import { PAGE_ACCESS, pageAccessLabels, type PageAccessField } from "@/lib/access";
@@ -170,9 +169,6 @@ export function Utility({
   const [settings, setSettings] = useState({
     academic_year_start_month: me.academic_year_start_month,
   });
-  const [branchCodes, setBranchCodes] = useState<Record<string, string>>(() =>
-    Object.fromEntries(branches.map((b) => [b.id, b.code])),
-  );
   const [boot, setBoot] = useState<BootInfo | null>(null);
   const [lanBusy, setLanBusy] = useState(false);
   // Semester courses must split evenly into years.
@@ -182,19 +178,6 @@ export function Utility({
       : course.duration_type === "semester" && course.duration % 2 !== 0
         ? "Semester courses must have an even number of semesters"
         : null;
-
-  // Keep the editable branch-code inputs in sync when a refresh reloads the
-  // branch list (without clobbering codes the admin is currently typing for
-  // other branches).
-  useEffect(() => {
-    setBranchCodes((current) => {
-      const next = { ...current };
-      for (const branch of branches) {
-        if (!(branch.id in next)) next[branch.id] = branch.code;
-      }
-      return next;
-    });
-  }, [branches]);
 
   const filteredUsers = useMemo(() => {
     const term = userSearch.trim().toLowerCase();
@@ -456,18 +439,6 @@ export function Utility({
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not save settings",
-      );
-    }
-  }
-
-  async function saveBranchCode(branchId: string) {
-    try {
-      await updateBranchCode(branchId, branchCodes[branchId] ?? "");
-      toast.success("Branch code updated");
-      onSaved();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not update branch code",
       );
     }
   }
@@ -1230,41 +1201,6 @@ export function Utility({
                 <Settings className="size-4" />
                 Save settings
               </Button>
-            </CardContent>
-          </Card>
-
-          <Card className="max-w-xl">
-            <CardHeader>
-              <CardTitle>Branch codes</CardTitle>
-              <CardDescription>
-                The branch segment used in form and receipt numbers.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              {branches.map((branch) => (
-                <div key={branch.id} className="flex items-end gap-3">
-                  <div className="flex flex-1 flex-col gap-2">
-                    <Label>{branch.name}</Label>
-                    <Input
-                      value={branchCodes[branch.id] ?? ""}
-                      onChange={(e) => {
-                        const value = e.currentTarget.value;
-                        setBranchCodes((current) => ({
-                          ...current,
-                          [branch.id]: value,
-                        }));
-                      }}
-                    />
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => void saveBranchCode(branch.id)}
-                  >
-                    Save
-                  </Button>
-                </div>
-              ))}
             </CardContent>
           </Card>
 

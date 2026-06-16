@@ -2565,20 +2565,23 @@ mod smoke_tests {
             "hard-deleted course is gone"
         );
 
-        // Document numbers are frozen at creation: renaming the branch code
-        // must not rewrite already-issued numbers.
-        db::update_branch_code(&pool, PRT, "PRX").await?;
+        // Branch codes are fixed because they are embedded in issued document
+        // numbers.
+        let branch_update = db::update_branch_code(&pool, PRT, "PRX").await;
+        assert!(
+            branch_update.is_err(),
+            "branch code updates must be blocked"
+        );
         let s1_after = db::load_student(&pool, &s1.id).await?;
         assert_eq!(
             s1_after.form_no, "PRJ-1-2026",
-            "form no frozen after code rename"
+            "form no remains on the canonical branch code"
         );
         let receipts_after = db::list_receipts(&pool, None, Some(&s1.id)).await?;
         assert!(
             receipts_after.iter().any(|r| r.receipt_no == "PRJ-1"),
-            "receipt no frozen"
+            "receipt no remains on the canonical branch code"
         );
-        db::update_branch_code(&pool, PRT, "PRJ").await?;
 
         // Branch moves are blocked on edit.
         let hmt_course_p1 = db::create_course(&pool, course_req(HMT, "HMT-BBA")).await?;

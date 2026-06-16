@@ -41,10 +41,6 @@ export function previewReceiptNo(branchId: string, date: string): Promise<string
   return call<string>("next_receipt_no", { branchId, date });
 }
 
-export function updateBranchCode(id: string, code: string) {
-  return call("update_branch", { id, code });
-}
-
 // Admin-only: the full course list including archived courses, for the
 // Utility management screen.
 export function listAllCourses(): Promise<Course[]> {

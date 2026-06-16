@@ -34,6 +34,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   checkForUpdate,
   downloadUpdate,
   installAndRelaunch,
@@ -275,15 +281,24 @@ export function AppShell({
               <h2 className="text-2xl font-semibold">{current?.label}</h2>
               <p className="text-sm text-muted-foreground">{current?.desc}</p>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onRefresh}
-              disabled={loading}
-            >
-              <RefreshCw className={cn("size-4", loading && "animate-spin")} />
-              {loading ? "Refreshing" : "Refresh"}
-            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    aria-label={loading ? "Refreshing" : "Refresh"}
+                    onClick={onRefresh}
+                    disabled={loading}
+                  >
+                    <RefreshCw
+                      className={cn("size-4", loading && "animate-spin")}
+                    />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{loading ? "Refreshing" : "Refresh"}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
           {children}
         </div>

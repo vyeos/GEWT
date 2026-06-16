@@ -19,6 +19,18 @@ use std::path::{Path, PathBuf};
 pub type BackupResult<T> = Result<T, String>;
 
 const SCHEMA_VERSION: i64 = 1;
+const PRJ_BRANCH_ID: &str = "11111111-1111-1111-1111-111111111111";
+const HMT_BRANCH_ID: &str = "22222222-2222-2222-2222-222222222222";
+const TLD_BRANCH_ID: &str = "33333333-3333-3333-3333-333333333333";
+
+fn fixed_branch_code(branch_id: &str, fallback: &str) -> String {
+    match branch_id {
+        PRJ_BRANCH_ID => "PRJ".to_string(),
+        HMT_BRANCH_ID => "HMT".to_string(),
+        TLD_BRANCH_ID => "TLD".to_string(),
+        _ => fallback.to_string(),
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct RawBranch {
@@ -488,7 +500,8 @@ pub async fn import_backup(
     // backup file could overwrite the admin password hash or global settings.
     let apply_config_and_accounts = restrict_branch.is_none();
 
-    // 1. Config: branches (newest-wins per row).
+    // 1. Config: branches (newest-wins per row). Branch codes are fixed for
+    // the seeded branches because document numbers embed them.
     for b in backup
         .config
         .branches
@@ -506,12 +519,13 @@ pub async fn import_backup(
             .map(|l| b.updated_at.as_str() > l)
             .unwrap_or(true)
         {
+            let code = fixed_branch_code(&b.id, &b.code);
             sqlx::query(
                 "INSERT INTO branches (id, code, name, updated_at) VALUES (?, ?, ?, ?)
-                 ON CONFLICT (id) DO UPDATE SET code = excluded.code, name = excluded.name, updated_at = excluded.updated_at",
+                 ON CONFLICT (id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at",
             )
             .bind(&b.id)
-            .bind(&b.code)
+            .bind(code)
             .bind(&b.name)
             .bind(&b.updated_at)
             .execute(&mut *tx)

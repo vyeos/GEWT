@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api, login, updateBranchCode } from "@/lib/api";
+import { api, login } from "@/lib/api";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 
@@ -20,11 +20,8 @@ describe("Tauri API compatibility layer", () => {
       password: "secret",
     });
 
-    await updateBranchCode("branch-1", "PRJ");
-    expect(invokeMock).toHaveBeenLastCalledWith("update_branch", {
-      id: "branch-1",
-      code: "PRJ",
-    });
+    await api("/branches", null);
+    expect(invokeMock).toHaveBeenLastCalledWith("list_branches", undefined);
   });
 
   it("maps REST-style course and student requests onto Tauri commands", async () => {
