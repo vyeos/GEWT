@@ -567,7 +567,7 @@ export function Students({
   if (selectedStudent && form) {
     return (
       <form onSubmit={submit} className="flex flex-col gap-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="sticky top-0 z-10 -mx-6 -mt-6 flex flex-wrap items-center justify-between gap-3 border-b bg-background px-6 py-4">
           <Button
             type="button"
             variant="outline"
