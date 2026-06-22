@@ -2396,13 +2396,7 @@ fn billing_through_period(student: &Student) -> i64 {
 
 fn current_period_label(student: &Student) -> String {
     let current_year = current_course_year_from_period(clamp_current_period(student));
-    let end = billing_through_period(student);
-    let start = ((current_year - 1) * 2 + 1).min(end);
-    if student.course_duration_type == "semester" {
-        format!("Year {current_year} (Semesters {start}-{end})")
-    } else {
-        format!("Year {current_year} (Terms {start}-{end})")
-    }
+    format!("Year {current_year}")
 }
 
 fn normalize_current_course_period(period: i64, course: &Course) -> DbResult<i64> {

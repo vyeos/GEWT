@@ -1393,7 +1393,7 @@ dependencies = [
 
 [[package]]
 name = "gewt"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "argon2",
  "chrono",

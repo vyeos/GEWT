@@ -49,7 +49,6 @@ import { CourseGroups } from "@/components/app/CourseGroups";
 import { StudentPhotoField } from "@/components/app/StudentPhotoField";
 import { api } from "@/lib/api";
 import {
-  formatCoursePeriod,
   formatCourseYear,
   formatPeriodLabel,
   getCourseDuration,
@@ -1223,7 +1222,7 @@ export function Students({
                   <TableHead>Student</TableHead>
                   <TableHead>Branch</TableHead>
                   <TableHead>Course</TableHead>
-                  <TableHead>Current Period</TableHead>
+                  <TableHead>Current Year</TableHead>
                   <TableHead>Admission Year</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
@@ -1251,10 +1250,7 @@ export function Students({
                       <Badge variant="secondary">{student.course_name}</Badge>
                     </TableCell>
                     <TableCell>
-                      {formatCoursePeriod(
-                        student,
-                        student.current_course_period,
-                      )}
+                      {formatCourseYear(getCurrentCourseYear(student))}
                     </TableCell>
                     <TableCell>{admissionYear(student)}</TableCell>
                     <TableCell>

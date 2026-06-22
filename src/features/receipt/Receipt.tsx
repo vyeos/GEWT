@@ -671,15 +671,12 @@ export function Receipt({
                 </Select>
               </div>
               <div className="flex flex-col gap-2">
-                <Label>Billing through</Label>
+                <Label>Current year</Label>
                 <div className="flex h-9 items-center gap-2 rounded-md border bg-muted/40 px-3 text-sm">
                   {selectedStudent && selectedStudentCurrentYear ? (
                     <>
                       <span>
-                        {formatCourseYearPeriodRange(
-                          selectedStudent,
-                          selectedStudentCurrentYear,
-                        )}
+                        {formatCourseYear(selectedStudentCurrentYear)}
                       </span>
                     </>
                   ) : (
