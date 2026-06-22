@@ -1197,6 +1197,87 @@ mod smoke_tests {
         Ok(())
     }
 
+    async fn fee_edit_cannot_drop_below_paid_run() -> Result<(), String> {
+        let (_tmp, pool) = test_pool().await?;
+        // Two-year course so a 2nd-year student has live (editable) year-2 fees.
+        let mut course_req = course_req(PRT, "Fee Lowering Guard");
+        course_req.duration = 2;
+        let course = db::create_course(&pool, course_req).await?;
+
+        let mut req = student_req(PRT, &course.id, "2026-09-01", 60000.0);
+        // Year 1: 60000 tuition + 0 other. Year 2: 70000 tuition + 60000 other.
+        req.tuition_fee_year_1 = Some(60000.0);
+        req.other_fee_year_1 = Some(0.0);
+        req.fee_year_2 = 130000.0;
+        req.tuition_fee_year_2 = Some(70000.0);
+        req.other_fee_year_2 = Some(60000.0);
+        // Years 3 and 4 are unused on a two-year course.
+        req.fee_year_3 = 0.0;
+        req.tuition_fee_year_3 = Some(0.0);
+        req.other_fee_year_3 = Some(0.0);
+        req.fee_year_4 = 0.0;
+        req.tuition_fee_year_4 = Some(0.0);
+        req.other_fee_year_4 = Some(0.0);
+        let student = db::create_student(&pool, req, ADMIN).await?;
+
+        // Advance the student into year 2 (period 3) so the year-2 tuition is billable.
+        let promoted = db::promote_students(
+            &pool,
+            PromoteRequest {
+                course_id: course.id.clone(),
+                admission_year: 2026,
+                student_ids: vec![student.id.clone()],
+            },
+        )
+        .await?;
+        let student = promoted.students.into_iter().next().unwrap();
+
+        // Collect the full tuition: 60000 (year 1) + 70000 (year 2) = 130000.
+        db::create_receipt(
+            &pool,
+            ReceiptRequest {
+                student_id: student.id.clone(),
+                receipt_date: "2027-09-02".into(),
+                fee_type: "Tuition".into(),
+                amount_paid: 130000.0,
+                payment_mode: "Cash".into(),
+                reference_no: None,
+            },
+            PRT,
+            ADMIN,
+        )
+        .await?;
+
+        // Admin mistakenly drops year-2 tuition from 70000 to 60000, which would
+        // strand 10000 of the collected tuition. This must be rejected.
+        let mut shrink = student_to_request(&student);
+        shrink.fee_year_2 = 120000.0;
+        shrink.tuition_fee_year_2 = Some(60000.0);
+        shrink.other_fee_year_2 = Some(60000.0);
+        assert!(
+            db::update_student(&pool, &student.id, shrink).await.is_err(),
+            "tuition total cannot be lowered below the tuition already paid"
+        );
+
+        // The stored fee is untouched after the rejected edit.
+        let reloaded = db::list_students(&pool, Some(PRT), false)
+            .await?
+            .into_iter()
+            .find(|s| s.id == student.id)
+            .expect("student still present");
+        assert_eq!(reloaded.tuition_fee_year_2, 70000.0);
+
+        // A correction that keeps the tuition total at or above the paid amount
+        // is still allowed: raising year-2 tuition to 80000 is fine.
+        let mut raise = student_to_request(&reloaded);
+        raise.fee_year_2 = 140000.0;
+        raise.tuition_fee_year_2 = Some(80000.0);
+        raise.other_fee_year_2 = Some(60000.0);
+        db::update_student(&pool, &reloaded.id, raise).await?;
+
+        Ok(())
+    }
+
     async fn backup_import_rejects_cross_branch_payloads_run() -> Result<(), String> {
         let (tmp, source) = test_pool().await?;
         let course = db::create_course(&source, course_req(PRT, "Backup Export Course")).await?;
@@ -2873,6 +2954,12 @@ mod smoke_tests {
     fn student_fee_split_validation() {
         tauri::async_runtime::block_on(student_fee_split_validation_run())
             .expect("student fee split validation test failed");
+    }
+
+    #[test]
+    fn fee_edit_cannot_drop_below_paid() {
+        tauri::async_runtime::block_on(fee_edit_cannot_drop_below_paid_run())
+            .expect("fee lowering guard test failed");
     }
 
     #[test]

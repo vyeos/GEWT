@@ -1821,6 +1821,48 @@ fn normalize_student_fees(req: &StudentRequest) -> DbResult<StudentFees> {
     })
 }
 
+/// Total amount paid (across all years) for a single fee type, ignoring
+/// cancelled receipts. Receipts only carry a fee type, not a year, so the
+/// invariant we protect is at the fee-type level.
+async fn total_paid_for_fee_type(
+    pool: &SqlitePool,
+    student_id: &str,
+    fee_type: &str,
+) -> DbResult<f64> {
+    sqlx::query_scalar(
+        "SELECT CAST(COALESCE(SUM(amount_paid), 0) AS REAL) FROM receipts
+         WHERE student_id = ? AND COALESCE(fee_type, 'Tuition') = ? AND cancelled = 0",
+    )
+    .bind(student_id)
+    .bind(fee_type)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// A fee type's total can never be lowered below what the student has already
+/// paid towards it. Otherwise an edit that drops, say, tuition from 70000 to
+/// 60000 after 70000 was collected would silently strip the 10000 surplus from
+/// the books (pending clamps at zero, so the over-payment just vanishes).
+async fn ensure_fees_cover_payments(
+    pool: &SqlitePool,
+    student_id: &str,
+    requested: &StudentFees,
+) -> DbResult<()> {
+    for (fee_type, requested_total) in [
+        ("Tuition", requested.tuition.iter().sum::<f64>()),
+        ("Other", requested.other.iter().sum::<f64>()),
+    ] {
+        let paid = total_paid_for_fee_type(pool, student_id, fee_type).await?;
+        if requested_total + 0.01 < paid {
+            return Err(format!(
+                "Total {fee_type} fee ({requested_total:.0}) cannot be less than the {paid:.0} already paid for it. Cancel a receipt first if a payment was wrong."
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn ensure_passed_year_fees_unchanged(
     existing: &Student,
     requested: &StudentFees,
@@ -1955,6 +1997,9 @@ pub async fn update_student(pool: &SqlitePool, id: &str, req: StudentRequest) ->
         &course,
     )?;
     ensure_passed_year_fees_unchanged(&existing, &fees, period)?;
+    if !existing.admission_cancelled {
+        ensure_fees_cover_payments(pool, id, &fees).await?;
+    }
 
     // Form numbering is assigned once at admission and never changes on edit.
     sqlx::query(
