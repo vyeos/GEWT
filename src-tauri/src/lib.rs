@@ -117,6 +117,17 @@ fn ensure_student_read_access(session: &Session) -> Result<(), String> {
     }
 }
 
+fn ensure_receipt_read_access(session: &Session, has_student_filter: bool) -> Result<(), String> {
+    if session.role == "admin"
+        || session.can_receipt
+        || (session.can_students && has_student_filter)
+    {
+        Ok(())
+    } else {
+        Err("You don't have access to this page".to_string())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Auth commands
 // ---------------------------------------------------------------------------
@@ -334,7 +345,7 @@ async fn list_receipts(
     student_id: Option<String>,
 ) -> Result<Vec<Receipt>, String> {
     let session = state.require_session().await?;
-    ensure_feature(&session, "receipt")?;
+    ensure_receipt_read_access(&session, student_id.is_some())?;
     db::list_receipts(
         &state.pool,
         branch_filter(&session).as_deref(),
@@ -848,7 +859,8 @@ pub fn run() {
 #[cfg(test)]
 mod smoke_tests {
     use super::{
-        branch_filter, ensure_branch, ensure_feature, ensure_student_read_access, Session,
+        branch_filter, ensure_branch, ensure_feature, ensure_receipt_read_access,
+        ensure_student_read_access, Session,
     };
     use crate::backup;
     use crate::db::{
@@ -982,12 +994,31 @@ mod smoke_tests {
             ensure_student_read_access(&employee).is_err(),
             "admission-only employees cannot read the student register"
         );
+        assert!(
+            ensure_receipt_read_access(&employee, true).is_err(),
+            "admission-only employees cannot read receipt history"
+        );
 
         let mut receipt_employee = employee_session(PRT);
         receipt_employee.can_receipt = true;
         assert!(
             ensure_student_read_access(&receipt_employee).is_ok(),
             "receipt access can read students for receipt selection"
+        );
+        assert!(
+            ensure_receipt_read_access(&receipt_employee, false).is_ok(),
+            "receipt access can read receipt history"
+        );
+
+        let mut students_employee = employee_session(PRT);
+        students_employee.can_students = true;
+        assert!(
+            ensure_receipt_read_access(&students_employee, true).is_ok(),
+            "students access can read payment history in student details"
+        );
+        assert!(
+            ensure_receipt_read_access(&students_employee, false).is_err(),
+            "students access still requires a specific student receipt history"
         );
     }
 
