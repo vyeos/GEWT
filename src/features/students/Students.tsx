@@ -58,7 +58,7 @@ import {
 import { admissionYear, money } from "@/lib/format";
 import { printPage } from "@/lib/print";
 import { cn } from "@/lib/utils";
-import type { Branch, Course, Me, Student } from "@/types";
+import type { Branch, Course, Me, PaymentMode, Student } from "@/types";
 import {
   AdmissionPrint,
   type PrintableAdmission,
@@ -100,6 +100,17 @@ type StudentForm = {
   other_fee_year_2: number;
   other_fee_year_3: number;
   other_fee_year_4: number;
+};
+
+type StudentReceipt = {
+  id: string;
+  receipt_no: string | number;
+  receipt_date: string;
+  fee_type: string;
+  payment_mode: PaymentMode;
+  amount_paid: number;
+  reference_no: string | null;
+  cancelled: boolean;
 };
 
 /// The stored student_name is the combined "surname name father" line. For
@@ -184,6 +195,8 @@ export function Students({
   onSaved: () => void;
 }) {
   const [students, setStudents] = useState<Student[]>([]);
+  const [studentReceipts, setStudentReceipts] = useState<StudentReceipt[]>([]);
+  const [receiptsLoading, setReceiptsLoading] = useState(false);
   const [courseId, setCourseId] = useState("");
   const [currentYearValue, setCurrentYearValue] = useState("");
   const [courseOpen, setCourseOpen] = useState(false);
@@ -296,6 +309,40 @@ export function Students({
     if (!currentYearValue || currentYears.includes(currentYearValue)) return;
     setCurrentYearValue("");
   }, [currentYearValue, currentYears]);
+
+  useEffect(() => {
+    if (!selectedStudent) {
+      setStudentReceipts([]);
+      setReceiptsLoading(false);
+      return;
+    }
+
+    let stale = false;
+    setReceiptsLoading(true);
+    api<StudentReceipt[]>(
+      `/receipts?student_id=${encodeURIComponent(selectedStudent.id)}`,
+      token,
+    )
+      .then((data) => {
+        if (!stale) setStudentReceipts(data);
+      })
+      .catch((error) => {
+        if (stale) return;
+        setStudentReceipts([]);
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Unable to load payment history",
+        );
+      })
+      .finally(() => {
+        if (!stale) setReceiptsLoading(false);
+      });
+
+    return () => {
+      stale = true;
+    };
+  }, [selectedStudent, token, refreshKey]);
 
   // When the student list reloads (global refresh), pick up the latest record
   // for the open editor — but never clobber edits in progress: the form is
@@ -872,6 +919,90 @@ export function Students({
                 })}
               </TableBody>
             </Table>
+          </CardContent>
+        </Card>
+
+        <Card className="p-0">
+          <CardHeader className="border-b p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold">Payment history</h2>
+                <p className="text-xs text-muted-foreground">
+                  Receipts recorded for this student.
+                </p>
+              </div>
+              {receiptsLoading && (
+                <span className="text-xs text-muted-foreground">Loading...</span>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            {receiptsLoading && studentReceipts.length === 0 ? (
+              <p className="p-6 text-center text-sm text-muted-foreground">
+                Loading payment history...
+              </p>
+            ) : studentReceipts.length === 0 ? (
+              <p className="p-6 text-center text-sm text-muted-foreground">
+                No payment history found
+              </p>
+            ) : (
+              <Table className="min-w-[720px] table-fixed">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-40">Receipt No</TableHead>
+                    <TableHead className="w-28">Date</TableHead>
+                    <TableHead className="w-24">Fee Type</TableHead>
+                    <TableHead className="w-20">Mode</TableHead>
+                    <TableHead className="w-28 text-right">Amount</TableHead>
+                    <TableHead>Remarks</TableHead>
+                    <TableHead className="w-28 text-right">Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {studentReceipts.map((receipt) => (
+                    <TableRow
+                      key={receipt.id}
+                      className={cn(receipt.cancelled && "opacity-60")}
+                    >
+                      <TableCell
+                        className={cn(
+                          "font-medium",
+                          receipt.cancelled && "line-through",
+                        )}
+                      >
+                        {receipt.receipt_no}
+                      </TableCell>
+                      <TableCell>{receipt.receipt_date}</TableCell>
+                      <TableCell>{receipt.fee_type || "Tuition"}</TableCell>
+                      <TableCell>{receipt.payment_mode}</TableCell>
+                      <TableCell
+                        className={cn(
+                          "text-right",
+                          receipt.cancelled && "line-through",
+                        )}
+                      >
+                        {money(receipt.amount_paid)}
+                      </TableCell>
+                      <TableCell>
+                        <span
+                          className="block max-w-56 truncate"
+                          title={receipt.reference_no || undefined}
+                        >
+                          {receipt.reference_no || "—"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {receipt.cancelled ? (
+                          <Badge variant="destructive">Cancelled</Badge>
+                        ) : (
+                          <Badge variant="secondary">Recorded</Badge>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </CardContent>
         </Card>
 
