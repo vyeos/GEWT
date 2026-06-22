@@ -193,6 +193,7 @@ export function Students({
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelPassword, setCancelPassword] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const [printSnapshot, setPrintSnapshot] = useState<PrintableAdmission | null>(
     null,
@@ -265,13 +266,17 @@ export function Students({
     () =>
       detailsCourse
         ? Array.from(
-            { length: Math.min(getCourseDuration(detailsCourse).totalYears, 4) },
+            {
+              length: Math.min(getCourseDuration(detailsCourse).totalYears, 4),
+            },
             (_, index) => index + 1,
           )
         : [],
     [detailsCourse],
   );
   const isCancelled = selectedStudent?.admission_cancelled ?? false;
+  const isAdmin = me.role === "admin";
+  const canEditStudent = isAdmin && !isCancelled;
 
   useEffect(() => {
     async function loadStudents() {
@@ -302,7 +307,9 @@ export function Students({
   // only re-seeded if it still matches the record it was loaded from.
   useEffect(() => {
     if (!selectedStudent) return;
-    const latest = students.find((student) => student.id === selectedStudent.id);
+    const latest = students.find(
+      (student) => student.id === selectedStudent.id,
+    );
     if (!latest || latest === selectedStudent) return;
     const pristine =
       form !== null &&
@@ -422,9 +429,15 @@ export function Students({
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!selectedStudent || !form) return;
+    if (!isAdmin) {
+      toast.error("Admin access required");
+      return;
+    }
     for (let year = 1; year <= 4; year += 1) {
       if (!feeTotalValid(year)) {
-        toast.error(`Tuition fee and other fee must add up to year ${year} fee`);
+        toast.error(
+          `Tuition fee and other fee must add up to year ${year} fee`,
+        );
         return;
       }
     }
@@ -435,10 +448,14 @@ export function Students({
         .map((part) => part.trim())
         .filter(Boolean)
         .join(" ");
-      const saved = await api<Student>(`/students/${selectedStudent.id}`, token, {
-        method: "PATCH",
-        body: JSON.stringify({ ...form, student_name: fullName }),
-      });
+      const saved = await api<Student>(
+        `/students/${selectedStudent.id}`,
+        token,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ ...form, student_name: fullName }),
+        },
+      );
       setStudents((current) =>
         current.map((student) => (student.id === saved.id ? saved : student)),
       );
@@ -455,12 +472,19 @@ export function Students({
 
   async function confirmCancelAdmission() {
     if (!selectedStudent) return;
+    if (!cancelPassword.trim()) {
+      toast.error("Enter the admin password to cancel admission");
+      return;
+    }
     setCancelling(true);
     try {
       const saved = await api<Student>(
         `/students/${selectedStudent.id}/cancel`,
         token,
-        { method: "POST" },
+        {
+          method: "POST",
+          body: JSON.stringify({ password: cancelPassword }),
+        },
       );
       setStudents((current) =>
         current.map((student) => (student.id === saved.id ? saved : student)),
@@ -468,6 +492,7 @@ export function Students({
       setSelectedStudent(saved);
       setForm(toForm(saved));
       setCancelOpen(false);
+      setCancelPassword("");
       toast.success(`Cancelled admission #${saved.form_no}`);
       onSaved();
     } catch (error) {
@@ -508,6 +533,7 @@ export function Students({
           </Button>
           <div className="flex items-center gap-2">
             {isCancelled && <Badge variant="destructive">Cancelled</Badge>}
+            {!isAdmin && <Badge variant="secondary">Read only</Badge>}
             <Button
               type="button"
               variant="outline"
@@ -516,11 +542,13 @@ export function Students({
               <Printer className="size-4" />
               Print admission form
             </Button>
-            <Button type="submit" disabled={saving}>
-              <Save className="size-4" />
-              {saving ? "Saving..." : "Save changes"}
-            </Button>
-            {me.role === "admin" && (
+            {isAdmin && (
+              <Button type="submit" disabled={saving || isCancelled}>
+                <Save className="size-4" />
+                {saving ? "Saving..." : "Save changes"}
+              </Button>
+            )}
+            {isAdmin && (
               <Button
                 type="button"
                 variant="destructive"
@@ -536,285 +564,305 @@ export function Students({
 
         <Card>
           <CardContent className="flex flex-col gap-5">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="flex flex-col gap-2">
-                <Label>Form No.</Label>
-                {/* Issued once at admission; never editable. */}
-                <Input value={form.form_no} readOnly disabled />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label>Admission date</Label>
-                <Input
-                  type="date"
-                  required
-                  min="1900-01-01"
-                  max="2100-12-31"
-                  value={form.admission_date}
-                  onChange={(e) =>
-                    updateForm("admission_date", e.currentTarget.value)
-                  }
-                />
-              </div>
-              <div className="flex flex-col gap-2 lg:col-span-2">
-                <Label>Course</Label>
-                <Popover
-                  open={detailsCourseOpen}
-                  onOpenChange={setDetailsCourseOpen}
-                >
-                  <PopoverTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      role="combobox"
-                      aria-expanded={detailsCourseOpen}
-                      className="w-full justify-between font-normal"
-                    >
-                      {detailsCourse ? (
-                        <span className="truncate">
-                          {detailsCourse.name}
-                          <span className="ml-1.5 text-muted-foreground">
-                            ({detailsBranch?.name})
-                          </span>
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground">
-                          Select course
-                        </span>
-                      )}
-                      <ChevronsUpDown className="ml-auto size-4 shrink-0 opacity-50" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent
-                    className="w-auto min-w-[var(--radix-popover-trigger-width)] p-0"
-                    align="start"
+            <fieldset
+              disabled={!canEditStudent || saving}
+              className="contents disabled:opacity-100"
+            >
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="flex flex-col gap-2">
+                  <Label>Form No.</Label>
+                  {/* Issued once at admission; never editable. */}
+                  <Input value={form.form_no} readOnly disabled />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Admission date</Label>
+                  <Input
+                    type="date"
+                    required
+                    min="1900-01-01"
+                    max="2100-12-31"
+                    value={form.admission_date}
+                    onChange={(e) =>
+                      updateForm("admission_date", e.currentTarget.value)
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-2 lg:col-span-2">
+                  <Label>Course</Label>
+                  <Popover
+                    open={detailsCourseOpen}
+                    onOpenChange={setDetailsCourseOpen}
                   >
-                    <CourseGroups
-                      groups={detailsCourseGroups}
-                      selectedCourseId={form.course_id}
-                      onSelect={(nextCourseId) => {
-                        updateCourse(nextCourseId);
-                        setDetailsCourseOpen(false);
-                      }}
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={detailsCourseOpen}
+                        className="w-full justify-between font-normal"
+                      >
+                        {detailsCourse ? (
+                          <span className="truncate">
+                            {detailsCourse.name}
+                            <span className="ml-1.5 text-muted-foreground">
+                              ({detailsBranch?.name})
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">
+                            Select course
+                          </span>
+                        )}
+                        <ChevronsUpDown className="ml-auto size-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      className="w-auto min-w-[var(--radix-popover-trigger-width)] p-0"
+                      align="start"
+                    >
+                      <CourseGroups
+                        groups={detailsCourseGroups}
+                        selectedCourseId={form.course_id}
+                        onSelect={(nextCourseId) => {
+                          updateCourse(nextCourseId);
+                          setDetailsCourseOpen(false);
+                        }}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="flex flex-col gap-2">
+                  <Label>Current period</Label>
+                  <Select
+                    value={String(form.current_course_period)}
+                    onValueChange={(value) =>
+                      updateForm("current_course_period", Number(value))
+                    }
+                    disabled={detailPeriods.length === 0}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {detailPeriods.map((period) => (
+                          <SelectItem key={period} value={String(period)}>
+                            {detailsCourse
+                              ? formatPeriodLabel(
+                                  detailsCourse.duration_type,
+                                  period,
+                                )
+                              : period}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Current year</Label>
+                  <Input
+                    disabled
+                    value={formatCourseYear(
+                      Math.max(Math.ceil(form.current_course_period / 2), 1),
+                    )}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Branch</Label>
+                  <Input disabled value={detailsBranch?.name ?? ""} />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Status</Label>
+                  <Input
+                    disabled
+                    value={
+                      selectedStudent.admission_cancelled_at
+                        ? `Cancelled on ${selectedStudent.admission_cancelled_at.slice(0, 10)}`
+                        : "Active"
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-[auto_1fr]">
+                <div className="sm:row-span-3">
+                  <StudentPhotoField
+                    value={form.photo}
+                    onChange={(photo) => updateForm("photo", photo)}
+                    disabled={!canEditStudent || saving}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <div className="flex flex-col gap-2">
+                    <Label>Surname</Label>
+                    <Input
+                      value={form.surname}
+                      onChange={(e) =>
+                        updateForm("surname", e.currentTarget.value)
+                      }
                     />
-                  </PopoverContent>
-                </Popover>
-              </div>
-            </div>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label>Student name</Label>
+                    <Input
+                      required
+                      value={form.student_name}
+                      onChange={(e) =>
+                        updateForm("student_name", e.currentTarget.value)
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label>Father's name</Label>
+                    <Input
+                      value={form.father_name}
+                      onChange={(e) =>
+                        updateForm("father_name", e.currentTarget.value)
+                      }
+                    />
+                  </div>
+                </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="flex flex-col gap-2">
-                <Label>Current period</Label>
-                <Select
-                  value={String(form.current_course_period)}
-                  onValueChange={(value) =>
-                    updateForm("current_course_period", Number(value))
-                  }
-                  disabled={detailPeriods.length === 0}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {detailPeriods.map((period) => (
-                        <SelectItem key={period} value={String(period)}>
-                          {detailsCourse
-                            ? formatPeriodLabel(detailsCourse.duration_type, period)
-                            : period}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label>Current year</Label>
-                <Input
-                  disabled
-                  value={formatCourseYear(
-                    Math.max(Math.ceil(form.current_course_period / 2), 1),
-                  )}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label>Branch</Label>
-                <Input disabled value={detailsBranch?.name ?? ""} />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label>Status</Label>
-                <Input
-                  disabled
-                  value={
-                    selectedStudent.admission_cancelled_at
-                      ? `Cancelled on ${selectedStudent.admission_cancelled_at.slice(0, 10)}`
-                      : "Active"
-                  }
-                />
-              </div>
-            </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+                  <div className="flex flex-col gap-2">
+                    <Label>Category</Label>
+                    <Select
+                      value={form.category}
+                      onValueChange={(value) => updateForm("category", value)}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {categories.map((category) => (
+                            <SelectItem key={category} value={category}>
+                              {category}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label>Religion</Label>
+                    <Input
+                      value={form.religion}
+                      onChange={(e) =>
+                        updateForm("religion", e.currentTarget.value)
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label>Caste</Label>
+                    <Input
+                      value={form.caste}
+                      onChange={(e) =>
+                        updateForm("caste", e.currentTarget.value)
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label>Gender</Label>
+                    <Select
+                      value={form.gender}
+                      onValueChange={(value) => updateForm("gender", value)}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {genders.map((gender) => (
+                            <SelectItem key={gender} value={gender}>
+                              {gender}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[auto_1fr]">
-              <div className="sm:row-span-3">
-                <StudentPhotoField
-                  value={form.photo}
-                  onChange={(photo) => updateForm("photo", photo)}
-                  disabled={saving || isCancelled}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+                  <div className="flex flex-col gap-2">
+                    <Label>Aadhar No.</Label>
+                    <Input
+                      value={form.aadhar}
+                      onChange={(e) =>
+                        updateForm("aadhar", e.currentTarget.value)
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label>Student Phone</Label>
+                    <Input
+                      value={form.student_phone}
+                      onChange={(e) =>
+                        updateForm("student_phone", e.currentTarget.value)
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label>Parent Phone</Label>
+                    <Input
+                      value={form.parent_phone}
+                      onChange={(e) =>
+                        updateForm("parent_phone", e.currentTarget.value)
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label>Admission year</Label>
+                    <Input disabled value={admissionYear(selectedStudent)} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label>Address</Label>
+                <Textarea
+                  value={form.address}
+                  onChange={(e) => updateForm("address", e.currentTarget.value)}
                 />
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div className="flex flex-col gap-2">
-                  <Label>Surname</Label>
+                  <Label>District</Label>
                   <Input
-                    value={form.surname}
-                    onChange={(e) => updateForm("surname", e.currentTarget.value)}
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label>Student name</Label>
-                  <Input
-                    required
-                    value={form.student_name}
+                    value={form.district}
                     onChange={(e) =>
-                      updateForm("student_name", e.currentTarget.value)
+                      updateForm("district", e.currentTarget.value)
                     }
                   />
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label>Father's name</Label>
+                  <Label>Taluka</Label>
                   <Input
-                    value={form.father_name}
+                    value={form.taluka}
                     onChange={(e) =>
-                      updateForm("father_name", e.currentTarget.value)
-                    }
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
-                <div className="flex flex-col gap-2">
-                  <Label>Category</Label>
-                  <Select
-                    value={form.category}
-                    onValueChange={(value) => updateForm("category", value)}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {categories.map((category) => (
-                          <SelectItem key={category} value={category}>
-                            {category}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label>Religion</Label>
-                  <Input
-                    value={form.religion}
-                    onChange={(e) => updateForm("religion", e.currentTarget.value)}
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label>Caste</Label>
-                  <Input
-                    value={form.caste}
-                    onChange={(e) => updateForm("caste", e.currentTarget.value)}
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label>Gender</Label>
-                  <Select
-                    value={form.gender}
-                    onValueChange={(value) => updateForm("gender", value)}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {genders.map((gender) => (
-                          <SelectItem key={gender} value={gender}>
-                            {gender}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
-                <div className="flex flex-col gap-2">
-                  <Label>Aadhar No.</Label>
-                  <Input
-                    value={form.aadhar}
-                    onChange={(e) => updateForm("aadhar", e.currentTarget.value)}
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label>Student Phone</Label>
-                  <Input
-                    value={form.student_phone}
-                    onChange={(e) =>
-                      updateForm("student_phone", e.currentTarget.value)
+                      updateForm("taluka", e.currentTarget.value)
                     }
                   />
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label>Parent Phone</Label>
+                  <Label>Pincode</Label>
                   <Input
-                    value={form.parent_phone}
+                    inputMode="numeric"
+                    value={form.pincode}
                     onChange={(e) =>
-                      updateForm("parent_phone", e.currentTarget.value)
+                      updateForm("pincode", e.currentTarget.value)
                     }
                   />
                 </div>
-                <div className="flex flex-col gap-2">
-                  <Label>Admission year</Label>
-                  <Input disabled value={admissionYear(selectedStudent)} />
-                </div>
               </div>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label>Address</Label>
-              <Textarea
-                value={form.address}
-                onChange={(e) => updateForm("address", e.currentTarget.value)}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div className="flex flex-col gap-2">
-                <Label>District</Label>
-                <Input
-                  value={form.district}
-                  onChange={(e) =>
-                    updateForm("district", e.currentTarget.value)
-                  }
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label>Taluka</Label>
-                <Input
-                  value={form.taluka}
-                  onChange={(e) => updateForm("taluka", e.currentTarget.value)}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label>Pincode</Label>
-                <Input
-                  inputMode="numeric"
-                  value={form.pincode}
-                  onChange={(e) => updateForm("pincode", e.currentTarget.value)}
-                />
-              </div>
-            </div>
+            </fieldset>
           </CardContent>
         </Card>
 
@@ -846,7 +894,7 @@ export function Students({
                             type="number"
                             min="0"
                             step="1"
-                            disabled={isCancelled || locked}
+                            disabled={!canEditStudent || locked}
                             value={Number(form[feeField(type, year)])}
                             onChange={(e) =>
                               updateFee(year, type, e.currentTarget.value)
@@ -875,7 +923,13 @@ export function Students({
           </CardContent>
         </Card>
 
-        <AlertDialog open={cancelOpen} onOpenChange={setCancelOpen}>
+        <AlertDialog
+          open={cancelOpen}
+          onOpenChange={(open) => {
+            setCancelOpen(open);
+            if (!open) setCancelPassword("");
+          }}
+        >
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Cancel Admission</AlertDialogTitle>
@@ -885,11 +939,24 @@ export function Students({
                 promotion, and fee receipt student lists.
               </AlertDialogDescription>
             </AlertDialogHeader>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="cancel-admin-password">Admin password</Label>
+              <Input
+                id="cancel-admin-password"
+                type="password"
+                autoComplete="current-password"
+                value={cancelPassword}
+                disabled={cancelling}
+                onChange={(event) =>
+                  setCancelPassword(event.currentTarget.value)
+                }
+              />
+            </div>
             <AlertDialogFooter>
               <AlertDialogCancel disabled={cancelling}>Back</AlertDialogCancel>
               <AlertDialogAction
                 variant="destructive"
-                disabled={cancelling}
+                disabled={cancelling || cancelPassword.trim().length === 0}
                 onClick={(event) => {
                   event.preventDefault();
                   void confirmCancelAdmission();
@@ -1046,7 +1113,10 @@ export function Students({
                       <Badge variant="secondary">{student.course_name}</Badge>
                     </TableCell>
                     <TableCell>
-                      {formatCoursePeriod(student, student.current_course_period)}
+                      {formatCoursePeriod(
+                        student,
+                        student.current_course_period,
+                      )}
                     </TableCell>
                     <TableCell>{admissionYear(student)}</TableCell>
                     <TableCell>

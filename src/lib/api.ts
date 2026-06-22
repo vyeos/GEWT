@@ -171,7 +171,10 @@ export async function api<T>(
   }
   const cancelMatch = rawPath.match(/^\/students\/(.+)\/cancel$/);
   if (cancelMatch && method === "POST") {
-    return call<T>("cancel_student", { id: cancelMatch[1] });
+    return call<T>("cancel_student", {
+      id: cancelMatch[1],
+      password: String(body?.password ?? ""),
+    });
   }
   const studentMatch = rawPath.match(/^\/students\/(.+)$/);
   if (studentMatch && method === "PATCH") {

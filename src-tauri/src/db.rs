@@ -431,6 +431,20 @@ async fn migrate_schema(pool: &SqlitePool) -> DbResult<()> {
         .await
         .map_err(|e| e.to_string())?;
     }
+
+    // The seeded MSW course is a four-semester program. Existing databases may
+    // still carry the original equivalent "2 years" labels; update only that
+    // exact seeded row/default shape.
+    sqlx::query(
+        "UPDATE courses SET duration = 4, duration_type = 'semester', updated_at = ?
+         WHERE id = '11111111-1111-1111-1111-000000000011'
+           AND duration = 2
+           AND duration_type = 'year'",
+    )
+    .bind(now_rfc3339())
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -581,8 +595,8 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
             "11111111-1111-1111-1111-000000000011",
             PRJ,
             "MSW",
-            2,
-            "year",
+            4,
+            "semester",
             "PRJ-MSW.png",
         ),
         (
@@ -1141,6 +1155,32 @@ pub async fn authenticate(pool: &SqlitePool, user_id: &str, password: &str) -> D
         can_students: row.8,
         can_promote: row.9,
     })
+}
+
+/// Verify the password for the currently logged-in database user id.
+pub async fn verify_user_password(
+    pool: &SqlitePool,
+    user_db_id: &str,
+    password: &str,
+) -> DbResult<()> {
+    let password_hash = sqlx::query_scalar::<_, String>(
+        "SELECT password_hash FROM users WHERE id = ? AND active = 1",
+    )
+    .bind(user_db_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(password_hash) = password_hash else {
+        if let Ok(parsed) = PasswordHash::new(DEFAULT_ADMIN_HASH) {
+            let _ = Argon2::default().verify_password(password.as_bytes(), &parsed);
+        }
+        return Err("Invalid password".to_string());
+    };
+
+    let parsed = PasswordHash::new(&password_hash).map_err(|_| "Invalid password".to_string())?;
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .map_err(|_| "Invalid password".to_string())
 }
 
 pub async fn load_me(pool: &SqlitePool, user_id: &str) -> DbResult<Me> {
