@@ -1,11 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Ban,
-  Check,
-  ChevronsUpDown,
-  Printer,
-  ReceiptText,
-} from "lucide-react";
+import { Ban, Check, ChevronsUpDown, Printer, ReceiptText } from "lucide-react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -47,10 +41,8 @@ import { paymentModes } from "@/data/seeds";
 import { branchesForUser } from "@/lib/access";
 import { api, previewReceiptNo } from "@/lib/api";
 import {
-  formatCoursePeriod,
   formatCourseYear,
-  getCourseBillingPeriods,
-  getCurrentCoursePeriod,
+  formatCourseYearPeriodRange,
   getCurrentCourseYear,
 } from "@/lib/course-duration";
 import { money, today } from "@/lib/format";
@@ -120,9 +112,6 @@ export function Receipt({
   const selectedStudent = students.find((student) => student.id === studentId);
   const selectedStudentCurrentYear = selectedStudent
     ? getCurrentCourseYear(selectedStudent)
-    : null;
-  const selectedStudentCurrentPeriod = selectedStudent
-    ? getCurrentCoursePeriod(selectedStudent)
     : null;
   const selectedBranch = branches.find(
     (branch) => branch.id === selectedStudent?.branch_id,
@@ -251,7 +240,7 @@ export function Receipt({
         ],
       },
     ];
-    const currentPeriod = getCurrentCoursePeriod(selectedStudent);
+    const currentYear = getCurrentCourseYear(selectedStudent);
 
     const paidByType = new Map<string, number>();
     for (const r of studentReceipts) {
@@ -261,34 +250,30 @@ export function Receipt({
     }
     const rows: {
       feeType: string;
-      period: string;
-      periodOrder: number;
+      year: string;
+      yearOrder: number;
       feeTypeOrder: number;
       total: number;
       pending: number;
     }[] = [];
-    const periods = getCourseBillingPeriods(selectedStudent);
     for (const [feeTypeOrder, group] of feeGroups.entries()) {
       let paid = paidByType.get(group.feeType) ?? 0;
-      for (const period of periods) {
-        if (period.semester > currentPeriod) break;
-        const yearlyFee = group.fees[period.year - 1] ?? 0;
-        const periodFee = yearlyFee / 2;
-        const deduct = Math.min(paid, periodFee);
+      for (let year = 1; year <= currentYear; year += 1) {
+        const yearlyFee = group.fees[year - 1] ?? 0;
+        const deduct = Math.min(paid, yearlyFee);
         paid -= deduct;
         rows.push({
           feeType: group.feeType,
-          period: period.label,
-          periodOrder: period.semester,
+          year: formatCourseYearPeriodRange(selectedStudent, year),
+          yearOrder: year,
           feeTypeOrder,
-          total: periodFee,
-          pending: periodFee - deduct,
+          total: yearlyFee,
+          pending: yearlyFee - deduct,
         });
       }
     }
     return rows.sort(
-      (a, b) =>
-        b.periodOrder - a.periodOrder || a.feeTypeOrder - b.feeTypeOrder,
+      (a, b) => b.yearOrder - a.yearOrder || a.feeTypeOrder - b.feeTypeOrder,
     );
   }, [selectedStudent, studentReceipts]);
   const amountMax = useMemo(
@@ -300,9 +285,6 @@ export function Receipt({
         : undefined,
     [feeStatusRows, feeType, selectedStudent],
   );
-  const feeStatusPeriodLabel =
-    selectedStudent?.course_duration_type === "semester" ? "Semester" : "Term";
-
   useEffect(() => {
     if (amountMax !== undefined && amount > amountMax) {
       setAmount(amountMax);
@@ -666,10 +648,7 @@ export function Receipt({
               </div>
               <div className="flex flex-col gap-2">
                 <Label>Find students from</Label>
-                <Select
-                  value={yearFilter}
-                  onValueChange={setYearFilter}
-                >
+                <Select value={yearFilter} onValueChange={setYearFilter}>
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="All years" />
                   </SelectTrigger>
@@ -692,21 +671,16 @@ export function Receipt({
                 </Select>
               </div>
               <div className="flex flex-col gap-2">
-                <Label>Current semester/term</Label>
+                <Label>Billing through</Label>
                 <div className="flex h-9 items-center gap-2 rounded-md border bg-muted/40 px-3 text-sm">
-                  {selectedStudent && selectedStudentCurrentPeriod ? (
+                  {selectedStudent && selectedStudentCurrentYear ? (
                     <>
                       <span>
-                        {formatCoursePeriod(
+                        {formatCourseYearPeriodRange(
                           selectedStudent,
-                          selectedStudentCurrentPeriod,
+                          selectedStudentCurrentYear,
                         )}
                       </span>
-                      {selectedStudentCurrentYear ? (
-                        <span className="text-muted-foreground">
-                          ({formatCourseYear(selectedStudentCurrentYear)})
-                        </span>
-                      ) : null}
                     </>
                   ) : (
                     <span className="text-muted-foreground">
@@ -815,13 +789,9 @@ export function Receipt({
                       <TableHead className="w-28">Date</TableHead>
                       <TableHead className="w-24">Fee Type</TableHead>
                       <TableHead className="w-20">Mode</TableHead>
-                      <TableHead className="w-28 text-right">
-                        Amount
-                      </TableHead>
+                      <TableHead className="w-28 text-right">Amount</TableHead>
                       <TableHead>Remarks</TableHead>
-                      <TableHead className="w-28 text-right">
-                        Actions
-                      </TableHead>
+                      <TableHead className="w-28 text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -918,9 +888,7 @@ export function Receipt({
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-[22%]">Fee Type</TableHead>
-                      <TableHead className="w-[32%]">
-                        {feeStatusPeriodLabel}
-                      </TableHead>
+                      <TableHead className="w-[32%]">Year</TableHead>
                       <TableHead className="w-[23%] text-right">
                         Total
                       </TableHead>
@@ -933,7 +901,7 @@ export function Receipt({
                     {feeStatusRows.map((row, i) => (
                       <TableRow key={i}>
                         <TableCell>{row.feeType}</TableCell>
-                        <TableCell>{row.period}</TableCell>
+                        <TableCell>{row.year}</TableCell>
                         <TableCell className="text-right">
                           {money(row.total)}
                         </TableCell>

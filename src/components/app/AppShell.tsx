@@ -71,7 +71,7 @@ const nav: {
   {
     key: "promote",
     label: "Promote",
-    desc: "Move students to next semester/term",
+    desc: "Move students to the next year",
     icon: GraduationCap,
   },
   {

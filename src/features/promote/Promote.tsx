@@ -42,7 +42,7 @@ import { branchesForUser } from "@/lib/access";
 import { api } from "@/lib/api";
 import {
   formatCourseYear,
-  formatCoursePeriod,
+  formatCourseYearPeriodRange,
   getCourseDuration,
   getCurrentCoursePeriod,
   getCurrentCourseYear,
@@ -209,7 +209,7 @@ export function Promote({
       }
       if (result.skipped_count > 0) {
         toast.warning(
-          `${result.skipped_count} student(s) already at final semester/term`,
+          `${result.skipped_count} student(s) already at final year`,
         );
       }
       onPromoted();
@@ -329,16 +329,14 @@ export function Promote({
                       checked={selectAllState}
                       disabled={selectableIds.length === 0}
                       aria-label="Select all students"
-                      onCheckedChange={(checked) =>
-                        toggleAll(checked === true)
-                      }
+                      onCheckedChange={(checked) => toggleAll(checked === true)}
                     />
                   </TableHead>
                   <TableHead>Form</TableHead>
                   <TableHead>Student</TableHead>
                   <TableHead>Branch</TableHead>
                   <TableHead>Course</TableHead>
-                  <TableHead>Current Period</TableHead>
+                  <TableHead>Billing Through</TableHead>
                   <TableHead>Current Year</TableHead>
                 </TableRow>
               </TableHeader>
@@ -346,7 +344,8 @@ export function Promote({
                 {visibleStudents.map((student) => {
                   const currentYear = getCurrentCourseYear(student);
                   const currentPeriod = getCurrentCoursePeriod(student);
-                  const totalPeriods = getCourseDuration(student).totalSemesters;
+                  const totalPeriods =
+                    getCourseDuration(student).totalSemesters;
                   const eligible = currentPeriod < totalPeriods;
                   return (
                     <TableRow
@@ -374,7 +373,7 @@ export function Promote({
                         <Badge variant="secondary">{student.course_name}</Badge>
                       </TableCell>
                       <TableCell>
-                        {formatCoursePeriod(student, currentPeriod)}
+                        {formatCourseYearPeriodRange(student, currentYear)}
                       </TableCell>
                       <TableCell>{formatCourseYear(currentYear)}</TableCell>
                     </TableRow>
@@ -393,7 +392,7 @@ export function Promote({
             <AlertDialogDescription>
               Promote {selectedStudents.length} selected student(s) from{" "}
               {selectedCourse?.name} admission year {admissionYearValue} to the
-              next semester/term?
+              next year? This advances two semesters/terms for fee billing.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

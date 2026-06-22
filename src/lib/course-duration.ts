@@ -100,6 +100,11 @@ export function getCurrentCourseYear(student: Student) {
   );
 }
 
+export function getBillingThroughPeriod(student: Student) {
+  const { totalSemesters } = getCourseDuration(student);
+  return Math.min(getCurrentCourseYear(student) * 2, totalSemesters);
+}
+
 export function formatCourseYear(year: number) {
   return `${ordinal(year)} Year`;
 }
@@ -110,4 +115,15 @@ export function formatPeriodLabel(durationType: string, period: number) {
 
 export function formatCoursePeriod(student: Student, period: number) {
   return formatPeriodLabel(student.course_duration_type, period);
+}
+
+export function formatCourseYearPeriodRange(student: Student, year: number) {
+  const { totalSemesters } = getCourseDuration(student);
+  const end = Math.min(year * 2, totalSemesters);
+  const start = Math.min((year - 1) * 2 + 1, end);
+  if (start === end) return formatCoursePeriod(student, start);
+
+  const periodName =
+    student.course_duration_type === "semester" ? "Semesters" : "Terms";
+  return `${formatCourseYear(year)} (${periodName} ${start}-${end})`;
 }
