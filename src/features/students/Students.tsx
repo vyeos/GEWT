@@ -111,6 +111,7 @@ type StudentReceipt = {
   amount_paid: number;
   reference_no: string | null;
   cancelled: boolean;
+  cancelled_at: string | null;
 };
 
 /// The stored student_name is the combined "surname name father" line. For
@@ -1041,7 +1042,13 @@ export function Students({
                       </TableCell>
                       <TableCell className="text-right">
                         {receipt.cancelled ? (
-                          <Badge variant="destructive">Cancelled</Badge>
+                          receipt.cancelled_at ? (
+                            <span className="text-xs text-muted-foreground">
+                              Cancelled {receipt.cancelled_at.slice(0, 10)}
+                            </span>
+                          ) : (
+                            <Badge variant="destructive">Cancelled</Badge>
+                          )
                         ) : (
                           <Badge variant="secondary">Recorded</Badge>
                         )}
