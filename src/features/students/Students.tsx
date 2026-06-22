@@ -291,7 +291,7 @@ export function Students({
       try {
         setStudents(
           await api<Student[]>(
-            `/students?include_cancelled=${me.role === "admin"}`,
+            "/students?include_cancelled=true",
             token,
           ),
         );
@@ -303,7 +303,7 @@ export function Students({
     }
 
     if (me.can_students) void loadStudents();
-  }, [me.can_students, me.role, refreshKey, token]);
+  }, [me.can_students, refreshKey, token]);
 
   useEffect(() => {
     if (!currentYearValue || currentYears.includes(currentYearValue)) return;

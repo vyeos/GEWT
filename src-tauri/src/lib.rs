@@ -254,9 +254,6 @@ async fn list_students(
     let session = state.require_session().await?;
     let include_cancelled = include_cancelled.unwrap_or(false);
     ensure_student_read_access(&session)?;
-    if include_cancelled && session.role != "admin" {
-        return Err("Admin access required".to_string());
-    }
     db::list_students(
         &state.pool,
         branch_filter(&session).as_deref(),
