@@ -701,7 +701,7 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
     // doesn't collide with an imported admin account (same id, same user_id).
     sqlx::query(
         "INSERT OR IGNORE INTO users (id, user_id, name, password_hash, role, branch_id, active, updated_at)
-         VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'IRRN', 'Initial Admin', ?, 'admin', NULL, 1, ?)",
+         VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'irrn', 'IRRN', ?, 'admin', NULL, 1, ?)",
     )
     .bind(DEFAULT_ADMIN_HASH)
     .bind(&now)

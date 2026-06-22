@@ -22,11 +22,11 @@ describe("Login UI", () => {
 
     render(<Login onLogin={onLogin} />);
 
-    await user.type(screen.getByLabelText("User ID"), "IRRN");
+    await user.type(screen.getByLabelText("User ID"), "irrn");
     await user.type(screen.getByLabelText("Password"), "Ripal@1305");
     await user.click(screen.getByRole("button", { name: "Sign In" }));
 
-    expect(loginMock).toHaveBeenCalledWith("IRRN", "Ripal@1305");
+    expect(loginMock).toHaveBeenCalledWith("irrn", "Ripal@1305");
     await waitFor(() => expect(onLogin).toHaveBeenCalledWith(makeMe()));
   });
 
@@ -41,7 +41,7 @@ describe("Login UI", () => {
 
     render(<Login onLogin={vi.fn()} />);
 
-    await user.type(screen.getByLabelText("User ID"), "IRRN");
+    await user.type(screen.getByLabelText("User ID"), "irrn");
     await user.type(screen.getByLabelText("Password"), "Ripal@1305");
     await user.click(screen.getByRole("button", { name: "Sign In" }));
 
@@ -58,11 +58,11 @@ describe("Login UI", () => {
 
     render(<Login onLogin={onLogin} />);
 
-    await user.type(screen.getByLabelText("User ID"), "IRRN");
+    await user.type(screen.getByLabelText("User ID"), "irrn");
     await user.type(screen.getByLabelText("Password"), "wrong");
     await user.click(screen.getByRole("button", { name: "Sign In" }));
 
-    await waitFor(() => expect(loginMock).toHaveBeenCalledWith("IRRN", "wrong"));
+    await waitFor(() => expect(loginMock).toHaveBeenCalledWith("irrn", "wrong"));
     expect(onLogin).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Sign In" })).toBeEnabled();
   });
