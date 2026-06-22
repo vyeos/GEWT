@@ -1,9 +1,7 @@
 import { createPortal } from "react-dom";
 import { amountInWords, displayDate, uppercase } from "@/lib/format";
 import {
-  formatCoursePeriod,
-  formatCourseYear,
-  getCurrentCoursePeriod,
+  formatCourseYearPeriodRange,
   getCurrentCourseYear,
 } from "@/lib/course-duration";
 import { PrintPage } from "@/components/print/PrintPage";
@@ -35,11 +33,7 @@ export function ReceiptPrint({
     return createPortal(<div id="receipt-print" />, document.body);
 
   const year = getCurrentCourseYear(student);
-  const period = getCurrentCoursePeriod(student);
-  const periodLabel = `${formatCourseYear(year)}-${formatCoursePeriod(
-    student,
-    period,
-  )}`;
+  const periodLabel = formatCourseYearPeriodRange(student, year);
   const receiptYear = receipt.receipt_date.slice(0, 4);
   const paymentDetail = receipt.reference_no
     ? `${receipt.payment_mode} / ${receipt.reference_no}`

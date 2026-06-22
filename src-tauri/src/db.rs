@@ -2075,11 +2075,13 @@ pub async fn promote_students(pool: &SqlitePool, req: PromoteRequest) -> DbResul
 
     let update_sql = format!(
         "UPDATE students
-         SET current_course_period = current_course_period + 1,
+         SET current_course_period = MIN(current_course_period + 2, ?),
              updated_at = ?
          WHERE id IN ({in_clause}) AND current_course_period < ?"
     );
-    let mut update_q = sqlx::query(&update_sql).bind(now_rfc3339());
+    let mut update_q = sqlx::query(&update_sql)
+        .bind(max_period)
+        .bind(now_rfc3339());
     for id in &ids {
         update_q = update_q.bind(id);
     }
@@ -2157,7 +2159,7 @@ pub async fn student_branch(pool: &SqlitePool, student_id: &str) -> DbResult<(St
 }
 
 /// The amount still owed by a student for one fee type, given everything that
-/// is due up to their current period. Used to reject overpayments server-side
+/// is due through the current year. Used to reject overpayments server-side
 /// (the frontend clamps too, but its receipt list can be stale).
 async fn pending_for_fee_type(
     pool: &SqlitePool,
@@ -2193,7 +2195,7 @@ async fn pending_for_fee_type(
         fees,
         student.course_duration,
         &student.course_duration_type,
-        clamp_current_period(student),
+        billing_through_period(student),
         paid,
     );
     Ok(breakdown.iter().map(|b| b.pending).sum())
@@ -2339,12 +2341,22 @@ fn clamp_current_period(student: &Student) -> i64 {
     )
 }
 
+fn billing_through_period(student: &Student) -> i64 {
+    let current_year = current_course_year_from_period(clamp_current_period(student));
+    (current_year * 2).min(total_course_periods(
+        student.course_duration,
+        &student.course_duration_type,
+    ))
+}
+
 fn current_period_label(student: &Student) -> String {
-    let p = clamp_current_period(student);
+    let current_year = current_course_year_from_period(clamp_current_period(student));
+    let end = billing_through_period(student);
+    let start = ((current_year - 1) * 2 + 1).min(end);
     if student.course_duration_type == "semester" {
-        format!("Semester {p}")
+        format!("Year {current_year} (Semesters {start}-{end})")
     } else {
-        format!("Term {p}")
+        format!("Year {current_year} (Terms {start}-{end})")
     }
 }
 
@@ -2400,7 +2412,7 @@ fn outstanding_year_breakdown(
     tuition_paid: f64,
     other_paid: f64,
 ) -> Vec<OutstandingYearBreakdown> {
-    let current_period = clamp_current_period(student);
+    let current_period = billing_through_period(student);
     let tuition = allocate_fee_by_year(
         [
             student.tuition_fee_year_1,

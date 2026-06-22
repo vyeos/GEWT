@@ -1076,7 +1076,7 @@ mod smoke_tests {
                 student_id: student.id.clone(),
                 receipt_date: "2026-09-02".into(),
                 fee_type: "Other".into(),
-                amount_paid: 100.0,
+                amount_paid: 200.0,
                 payment_mode: "UPI".into(),
                 reference_no: Some(" UPI-123 ".into()),
             },
@@ -1115,7 +1115,7 @@ mod smoke_tests {
                 student_id: student.id.clone(),
                 receipt_date: "2026-09-04".into(),
                 fee_type: "Tuition".into(),
-                amount_paid: 500.0,
+                amount_paid: 1000.0,
                 payment_mode: "Cash".into(),
                 reference_no: None,
             },
@@ -1283,11 +1283,11 @@ mod smoke_tests {
         Ok(())
     }
 
-    async fn promotion_deduplicates_and_stops_at_course_end_run() -> Result<(), String> {
+    async fn promotion_advances_one_year_and_stops_at_course_end_run() -> Result<(), String> {
         let (_tmp, pool) = test_pool().await?;
-        let mut course_req = course_req(PRT, "One Year");
-        course_req.duration = 1;
-        let course = db::create_course(&pool, course_req).await?;
+        let mut one_year_req = course_req(PRT, "One Year");
+        one_year_req.duration = 1;
+        let course = db::create_course(&pool, one_year_req).await?;
         let student = db::create_student(
             &pool,
             student_req(PRT, &course.id, "2026-09-01", 1000.0),
@@ -1309,7 +1309,10 @@ mod smoke_tests {
             first.skipped_count, 0,
             "duplicates are not counted as skips"
         );
-        assert_eq!(first.students[0].current_course_period, 2);
+        assert_eq!(
+            first.students[0].current_course_period, 2,
+            "one-year courses cap at their final second period"
+        );
 
         let second = db::promote_students(
             &pool,
@@ -1326,6 +1329,29 @@ mod smoke_tests {
             "students at final period are skipped"
         );
         assert_eq!(second.students[0].current_course_period, 2);
+
+        let mut two_year_req = course_req(PRT, "Two Year");
+        two_year_req.duration = 2;
+        let two_year_course = db::create_course(&pool, two_year_req).await?;
+        let two_year_student = db::create_student(
+            &pool,
+            student_req(PRT, &two_year_course.id, "2026-09-01", 1000.0),
+            ADMIN,
+        )
+        .await?;
+        let promoted_one_year = db::promote_students(
+            &pool,
+            PromoteRequest {
+                course_id: two_year_course.id.clone(),
+                admission_year: 2026,
+                student_ids: vec![two_year_student.id.clone()],
+            },
+        )
+        .await?;
+        assert_eq!(
+            promoted_one_year.students[0].current_course_period, 3,
+            "promotion advances by one full year, or two fee periods"
+        );
 
         Ok(())
     }
@@ -1429,8 +1455,10 @@ mod smoke_tests {
         student_id: &str,
         target_period: i64,
     ) -> Result<(), String> {
-        let current = db::load_student(pool, student_id).await?.current_course_period;
-        for _ in current..target_period {
+        let mut current = db::load_student(pool, student_id)
+            .await?
+            .current_course_period;
+        while current < target_period {
             db::promote_students(
                 pool,
                 PromoteRequest {
@@ -1440,6 +1468,13 @@ mod smoke_tests {
                 },
             )
             .await?;
+            let next = db::load_student(pool, student_id)
+                .await?
+                .current_course_period;
+            if next == current {
+                break;
+            }
+            current = next;
         }
         Ok(())
     }
@@ -1468,13 +1503,13 @@ mod smoke_tests {
         let cross = db::create_student(&pool, make("2026-09-01"), ADMIN).await?;
         let intra = db::create_student(&pool, make("2026-09-02"), ADMIN).await?;
 
-        // Both reach period 3 (year 2, first semester): periods 1, 2 (year 1)
-        // and 3 (year 2) are now due.
+        // Both reach period 3 (year 2): periods 1-4 are now due because
+        // billing is collected for the full current year.
         promote_to_period(&pool, &course, &cross.id, 3).await?;
         promote_to_period(&pool, &course, &intra.id, 3).await?;
 
-        // Tuition due so far: 800 (year 1) + 750 (half of year 2) = 1550.
-        // Pay 1000 -> fills year 1 (800), spills 200 into year 2's 750.
+        // Tuition due so far: 800 (year 1) + 1500 (year 2) = 2300.
+        // Pay 1000 -> fills year 1 (800), spills 200 into year 2.
         db::create_receipt(
             &pool,
             ReceiptRequest {
@@ -1489,7 +1524,7 @@ mod smoke_tests {
             ADMIN,
         )
         .await?;
-        // Pay 300 -> less than one period's 400, so it stays entirely in year 1.
+        // Pay 300 -> stays entirely in year 1 before year 2 sees anything.
         db::create_receipt(
             &pool,
             ReceiptRequest {
@@ -1518,21 +1553,47 @@ mod smoke_tests {
         // Cross-year payment: year 1 tuition fully covered before year 2 sees a
         // rupee, proving earliest-period-first allocation.
         let cy1 = year_row(cross_row, 1);
-        assert_eq!((cy1.tuition.due, cy1.tuition.paid, cy1.tuition.pending), (800.0, 800.0, 0.0));
-        assert_eq!((cy1.other.due, cy1.other.paid, cy1.other.pending), (200.0, 0.0, 200.0));
-        assert_eq!((cy1.total_due, cy1.total_paid, cy1.pending), (1000.0, 800.0, 200.0));
+        assert_eq!(
+            (cy1.tuition.due, cy1.tuition.paid, cy1.tuition.pending),
+            (800.0, 800.0, 0.0)
+        );
+        assert_eq!(
+            (cy1.other.due, cy1.other.paid, cy1.other.pending),
+            (200.0, 0.0, 200.0)
+        );
+        assert_eq!(
+            (cy1.total_due, cy1.total_paid, cy1.pending),
+            (1000.0, 800.0, 200.0)
+        );
         let cy2 = year_row(cross_row, 2);
-        assert_eq!((cy2.tuition.due, cy2.tuition.paid, cy2.tuition.pending), (750.0, 200.0, 550.0));
-        assert_eq!((cy2.other.due, cy2.other.paid, cy2.other.pending), (250.0, 0.0, 250.0));
-        assert_eq!((cy2.total_due, cy2.total_paid, cy2.pending), (1000.0, 200.0, 800.0));
-        assert_eq!((cross_row.total_due, cross_row.total_paid, cross_row.pending), (2000.0, 1000.0, 1000.0));
+        assert_eq!(
+            (cy2.tuition.due, cy2.tuition.paid, cy2.tuition.pending),
+            (1500.0, 200.0, 1300.0)
+        );
+        assert_eq!(
+            (cy2.other.due, cy2.other.paid, cy2.other.pending),
+            (500.0, 0.0, 500.0)
+        );
+        assert_eq!(
+            (cy2.total_due, cy2.total_paid, cy2.pending),
+            (2000.0, 200.0, 1800.0)
+        );
+        assert_eq!(
+            (cross_row.total_due, cross_row.total_paid, cross_row.pending),
+            (3000.0, 1000.0, 2000.0)
+        );
 
-        // Intra-year partial: 300 lands on period 1 only (its 400 due), leaving
-        // period 2 of year 1 fully pending; year 2 is untouched.
+        // Intra-year partial: 300 lands in year 1, leaving year 2 untouched.
         let iy1 = year_row(intra_row, 1);
-        assert_eq!((iy1.tuition.due, iy1.tuition.paid, iy1.tuition.pending), (800.0, 300.0, 500.0));
+        assert_eq!(
+            (iy1.tuition.due, iy1.tuition.paid, iy1.tuition.pending),
+            (800.0, 300.0, 500.0)
+        );
         let iy2 = year_row(intra_row, 2);
-        assert_eq!((iy2.tuition.due, iy2.tuition.paid, iy2.tuition.pending), (750.0, 0.0, 750.0));
+        assert_eq!(
+            (iy2.tuition.due, iy2.tuition.paid, iy2.tuition.pending),
+            (1500.0, 0.0, 1500.0)
+        );
 
         Ok(())
     }
@@ -1612,7 +1673,10 @@ mod smoke_tests {
         .fetch_one(&pool)
         .await
         .map_err(|e| e.to_string())?;
-        assert_eq!(has_col, 0, "legacy current_course_year column should be dropped");
+        assert_eq!(
+            has_col, 0,
+            "legacy current_course_year column should be dropped"
+        );
         let students = db::list_students(&pool, Some(PRT), true).await?;
         assert_eq!(students.len(), 1, "student survives the column drop");
 
@@ -2487,15 +2551,15 @@ mod smoke_tests {
         .await?;
         assert_eq!(receipt.receipt_no, "PRJ-1", "receipt numbering");
 
-        // Overpayment is rejected server-side: s1's tuition due so far is 500
-        // (period 1 of a 1000/year course) and it is fully paid.
+        // Overpayment is rejected server-side: s1's annual tuition due is
+        // 1000, with 500 still pending after the first receipt.
         let overpay = db::create_receipt(
             &pool,
             ReceiptRequest {
                 student_id: s1.id.clone(),
                 receipt_date: "2026-09-03".into(),
                 fee_type: "Tuition".into(),
-                amount_paid: 100.0,
+                amount_paid: 600.0,
                 payment_mode: "Cash".into(),
                 reference_no: None,
             },
@@ -2514,7 +2578,7 @@ mod smoke_tests {
                 student_id: s1.id.clone(),
                 receipt_date: "2026-09-04".into(),
                 fee_type: "Tuition".into(),
-                amount_paid: 500.0,
+                amount_paid: 1000.0,
                 payment_mode: "Cash".into(),
                 reference_no: None,
             },
@@ -2755,17 +2819,15 @@ mod smoke_tests {
         )
         .await?;
 
-        for _ in 0..2 {
-            db::promote_students(
-                &pool,
-                PromoteRequest {
-                    course_id: course.id.clone(),
-                    admission_year: 2026,
-                    student_ids: vec![student.id.clone()],
-                },
-            )
-            .await?;
-        }
+        db::promote_students(
+            &pool,
+            PromoteRequest {
+                course_id: course.id.clone(),
+                admission_year: 2026,
+                student_ids: vec![student.id.clone()],
+            },
+        )
+        .await?;
 
         let mut locked_fee_req = student_req(PRT, &course.id, "2026-09-01", 1200.0);
         locked_fee_req.current_course_period = Some(3);
@@ -2817,8 +2879,8 @@ mod smoke_tests {
     }
 
     #[test]
-    fn promotion_deduplicates_and_stops_at_course_end() {
-        tauri::async_runtime::block_on(promotion_deduplicates_and_stops_at_course_end_run())
+    fn promotion_advances_one_year_and_stops_at_course_end() {
+        tauri::async_runtime::block_on(promotion_advances_one_year_and_stops_at_course_end_run())
             .expect("promotion limit test failed");
     }
 
