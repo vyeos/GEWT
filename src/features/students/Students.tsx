@@ -664,7 +664,7 @@ export function Students({
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent
-                      className="w-auto min-w-[var(--radix-popover-trigger-width)] p-0"
+                      className="w-auto p-0"
                       align="start"
                     >
                       <CourseGroups
@@ -1137,7 +1137,7 @@ export function Students({
                 </Button>
               </PopoverTrigger>
               <PopoverContent
-                className="w-auto min-w-[var(--radix-popover-trigger-width)] p-0"
+                className="w-auto p-0"
                 align="start"
               >
                 <CourseGroups
