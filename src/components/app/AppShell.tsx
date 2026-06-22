@@ -274,32 +274,32 @@ export function AppShell({
         </div>
       </aside>
 
-      <main className="flex-1 overflow-auto">
-        <div className="flex flex-col gap-6 p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-2xl font-semibold">{current?.label}</h2>
-              <p className="text-sm text-muted-foreground">{current?.desc}</p>
-            </div>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon-sm"
-                    aria-label={loading ? "Refreshing" : "Refresh"}
-                    onClick={onRefresh}
-                    disabled={loading}
-                  >
-                    <RefreshCw
-                      className={cn("size-4", loading && "animate-spin")}
-                    />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{loading ? "Refreshing" : "Refresh"}</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+      <main className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center justify-between border-b px-6 py-4">
+          <div>
+            <h2 className="text-2xl font-semibold">{current?.label}</h2>
+            <p className="text-sm text-muted-foreground">{current?.desc}</p>
           </div>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label={loading ? "Refreshing" : "Refresh"}
+                  onClick={onRefresh}
+                  disabled={loading}
+                >
+                  <RefreshCw
+                    className={cn("size-4", loading && "animate-spin")}
+                  />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{loading ? "Refreshing" : "Refresh"}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+        <div className="flex flex-1 flex-col gap-6 overflow-auto p-6">
           {children}
         </div>
       </main>

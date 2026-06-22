@@ -10,9 +10,7 @@ use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use tauri::Manager;
-use tauri_plugin_updater::UpdaterExt;
 use tokio::sync::RwLock;
 
 /// The authenticated identity for the running app. Held in memory only; closing
@@ -658,51 +656,15 @@ fn macos_print(webview_ptr: *mut std::ffi::c_void) {
 }
 
 // ---------------------------------------------------------------------------
-// Updater (GitHub releases) — kept; downloads only app binaries, no data.
+// Updater (GitHub releases) — downloads only app binaries, no data.
+//
+// The check/download/install flow lives entirely in the frontend (see
+// `src/lib/updater.ts` + `AppShell`): on launch it checks and downloads any
+// update in the background, then surfaces a "Restart to update" button so the
+// user installs it on their own schedule. We deliberately do NOT block startup
+// to install here — doing so delayed the window from appearing and made the
+// app look frozen while a new release downloaded.
 // ---------------------------------------------------------------------------
-
-async fn install_startup_update<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
-    if cfg!(debug_assertions) {
-        return false;
-    }
-    let updater = match app
-        .updater_builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-    {
-        Ok(updater) => updater,
-        Err(error) => {
-            eprintln!("GEWT update check could not be prepared: {error}");
-            return false;
-        }
-    };
-    let update = match updater.check().await {
-        Ok(update) => update,
-        Err(error) => {
-            eprintln!("GEWT update check failed: {error}");
-            return false;
-        }
-    };
-    let Some(update) = update else {
-        return false;
-    };
-    eprintln!("GEWT update {} is available. Installing.", update.version);
-    // This runs before the window shows; cap the download so a flaky
-    // connection can't stall app launch indefinitely. AppShell retries the
-    // update in the background after startup anyway.
-    let install = update.download_and_install(|_, _| {}, || {});
-    match tokio::time::timeout(Duration::from_secs(180), install).await {
-        Ok(Ok(())) => true,
-        Ok(Err(error)) => {
-            eprintln!("GEWT update install failed: {error}");
-            false
-        }
-        Err(_) => {
-            eprintln!("GEWT update download timed out; starting without it.");
-            false
-        }
-    }
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -712,13 +674,6 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            let update_installed = tauri::async_runtime::block_on(async {
-                install_startup_update(app.handle()).await
-            });
-            if update_installed {
-                app.handle().restart();
-            }
-
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
 
