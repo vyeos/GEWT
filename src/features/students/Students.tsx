@@ -169,9 +169,8 @@ function toForm(student: Student): StudentForm {
 }
 
 function feeField(type: "fee" | "tuition" | "other", year: number) {
-  return `${
-    type === "fee" ? "fee" : `${type}_fee`
-  }_year_${year}` as keyof StudentForm;
+  return `${type === "fee" ? "fee" : `${type}_fee`
+    }_year_${year}` as keyof StudentForm;
 }
 
 function numberValue(value: string) {
@@ -237,9 +236,9 @@ export function Students({
     () =>
       selectedCourse
         ? Array.from(
-            { length: getCourseDuration(selectedCourse).totalYears },
-            (_, index) => String(index + 1),
-          )
+          { length: getCourseDuration(selectedCourse).totalYears },
+          (_, index) => String(index + 1),
+        )
         : [],
     [selectedCourse],
   );
@@ -268,9 +267,9 @@ export function Students({
     () =>
       detailsCourse
         ? Array.from(
-            { length: getCourseDuration(detailsCourse).totalSemesters },
-            (_, index) => index + 1,
-          )
+          { length: getCourseDuration(detailsCourse).totalSemesters },
+          (_, index) => index + 1,
+        )
         : [],
     [detailsCourse],
   );
@@ -280,11 +279,11 @@ export function Students({
     () =>
       detailsCourse
         ? Array.from(
-            {
-              length: Math.min(getCourseDuration(detailsCourse).totalYears, 4),
-            },
-            (_, index) => index + 1,
-          )
+          {
+            length: Math.min(getCourseDuration(detailsCourse).totalYears, 4),
+          },
+          (_, index) => index + 1,
+        )
         : [],
     [detailsCourse],
   );
@@ -566,8 +565,8 @@ export function Students({
 
   if (selectedStudent && form) {
     return (
-      <form onSubmit={submit} className="flex flex-col gap-6">
-        <div className="sticky top-0 z-10 -mx-6 -mt-6 flex flex-wrap items-center justify-between gap-3 border-b bg-background px-6 py-4">
+      <form onSubmit={submit} className="-mt-6 flex flex-col gap-6">
+        <div className="sticky -top-6 z-10 -mx-6 flex flex-wrap items-center justify-between gap-3 bg-background px-6 py-4">
           <Button
             type="button"
             variant="outline"
@@ -700,9 +699,9 @@ export function Students({
                           <SelectItem key={period} value={String(period)}>
                             {detailsCourse
                               ? formatPeriodLabel(
-                                  detailsCourse.duration_type,
-                                  period,
-                                )
+                                detailsCourse.duration_type,
+                                period,
+                              )
                               : period}
                           </SelectItem>
                         ))}
@@ -971,7 +970,7 @@ export function Students({
           </CardContent>
         </Card>
 
-        <Card className="p-0">
+        <Card className="gap-0 p-0">
           <CardHeader className="border-b p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -1004,7 +1003,7 @@ export function Students({
                     <TableHead className="w-20">Mode</TableHead>
                     <TableHead className="w-28 text-right">Amount</TableHead>
                     <TableHead>Remarks</TableHead>
-                    <TableHead className="w-28 text-right">Status</TableHead>
+                    <TableHead className="w-44 text-right">Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1042,13 +1041,14 @@ export function Students({
                       </TableCell>
                       <TableCell className="text-right">
                         {receipt.cancelled ? (
-                          receipt.cancelled_at ? (
-                            <span className="text-xs text-muted-foreground">
-                              Cancelled {receipt.cancelled_at.slice(0, 10)}
-                            </span>
-                          ) : (
+                          <span className="flex items-center justify-end gap-2">
+                            {receipt.cancelled_at && (
+                              <span className="text-xs text-muted-foreground">
+                                {receipt.cancelled_at.slice(0, 10)}
+                              </span>
+                            )}
                             <Badge variant="destructive">Cancelled</Badge>
-                          )
+                          </span>
                         ) : (
                           <Badge variant="secondary">Recorded</Badge>
                         )}
