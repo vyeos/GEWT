@@ -97,7 +97,7 @@ cd src-tauri && cargo check
 cd src-tauri && cargo test   # runs the db/backup smoke tests
 ```
 
-The seeded admin login is user ID `admin`, password `admin123`. It exists only
+The seeded admin login is user ID `IRRN`, password `Ripal@1305`. It exists only
 for first launch; the admin is expected to rotate it. Never pre-fill or print
 these credentials in the UI.
 

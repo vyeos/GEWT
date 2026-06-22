@@ -2359,6 +2359,9 @@ mod smoke_tests {
     async fn run() -> Result<(), String> {
         let (tmp, pool) = test_pool().await?;
 
+        let seeded_admin = db::authenticate(&pool, "IRRN", "Ripal@1305").await?;
+        assert_eq!(seeded_admin.role, "admin", "seeded admin login works");
+
         let prj_seed_courses = db::list_courses(&pool, Some(PRT), false).await?;
         let prj_seed_names: Vec<&str> = prj_seed_courses
             .iter()

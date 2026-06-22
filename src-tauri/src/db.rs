@@ -21,10 +21,10 @@ use std::str::FromStr;
 
 pub type DbResult<T> = Result<T, String>;
 
-/// The Argon2id hash of the default `admin123` password, reused from the
-/// original Postgres seed. Rotated by the admin after first login.
+/// The Argon2id hash of the default seeded admin password. Rotated by the admin
+/// after first login.
 const DEFAULT_ADMIN_HASH: &str =
-    "$argon2id$v=19$m=19456,t=2,p=1$d1/80bbKsUauEfQW/gLl4g$FMqkF2PX6DU4pRJrSzTsRXu5pU5Hnd80+e0SRRbU/bI";
+    "$argon2id$v=19$m=19456,t=2,p=1$UkZBbFJHMXBOSklRb3IwZw$B1kKcIvdHObfeFc8sUBay0+IbZILpK6ZP0OmwgHiFfo";
 
 pub fn db_file(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("gewt.db")
@@ -701,7 +701,7 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
     // doesn't collide with an imported admin account (same id, same user_id).
     sqlx::query(
         "INSERT OR IGNORE INTO users (id, user_id, name, password_hash, role, branch_id, active, updated_at)
-         VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'admin', 'Initial Admin', ?, 'admin', NULL, 1, ?)",
+         VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'IRRN', 'Initial Admin', ?, 'admin', NULL, 1, ?)",
     )
     .bind(DEFAULT_ADMIN_HASH)
     .bind(&now)

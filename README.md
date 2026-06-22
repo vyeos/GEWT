@@ -36,7 +36,7 @@ Seeded branches use stable IDs so imports align across machines:
 - HMT: `22222222-2222-2222-2222-222222222222`
 - Talod: `33333333-3333-3333-3333-333333333333`
 
-The seeded admin login is user ID `admin`, password `admin123`. It exists only
+The seeded admin login is user ID `IRRN`, password `Ripal@1305`. It exists only
 for first launch and is expected to be rotated by the admin. Do not prefill or
 display those credentials in the UI.
 
