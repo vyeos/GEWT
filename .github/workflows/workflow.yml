@@ -16,15 +16,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Use persistent Rust home
+        run: |
+          echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          mkdir -p "$HOME/.rustup" "$HOME/.cargo"
+
+      # Keep rust-cache off the self-hosted macOS runner. Its post-job cleanup is
+      # not worth risking the user-level rustup/cargo install on this machine.
       - name: Verify Rust
         run: |
           rustc --version
           cargo --version
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri -> target
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -61,6 +65,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Use persistent Rust home (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          mkdir -p "$HOME/.rustup" "$HOME/.cargo"
 
       - name: Install Rust (Windows)
         if: matrix.platform == 'windows'
