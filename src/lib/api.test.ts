@@ -41,9 +41,13 @@ describe("Tauri API compatibility layer", () => {
       includeCancelled: true,
     });
 
-    await api("/students/student-1/cancel", null, { method: "POST" });
+    await api("/students/student-1/cancel", null, {
+      method: "POST",
+      body: JSON.stringify({ password: "admin-secret" }),
+    });
     expect(invokeMock).toHaveBeenLastCalledWith("cancel_student", {
       id: "student-1",
+      password: "admin-secret",
     });
   });
 

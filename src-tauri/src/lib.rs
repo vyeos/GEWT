@@ -279,21 +279,26 @@ async fn update_student(
     id: String,
     req: StudentRequest,
 ) -> Result<Student, String> {
-    let session = state.require_session().await?;
+    let session = state.require_admin().await?;
     ensure_feature(&session, "students")?;
     ensure_branch(&session, &req.branch_id)?;
     let existing = db::load_student(&state.pool, &id).await?;
     ensure_branch(&session, &existing.branch_id)?;
-    if existing.admission_cancelled && session.role != "admin" {
-        return Err("You don't have access to this student".to_string());
-    }
     db::update_student(&state.pool, &id, req).await
 }
 
 #[tauri::command]
-async fn cancel_student(state: tauri::State<'_, AppState>, id: String) -> Result<Student, String> {
+async fn cancel_student(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    password: String,
+) -> Result<Student, String> {
     let session = state.require_admin().await?;
     ensure_feature(&session, "students")?;
+    if password.trim().is_empty() {
+        return Err("Admin password is required".to_string());
+    }
+    db::verify_user_password(&state.pool, &session.user_db_id, &password).await?;
     db::cancel_student(&state.pool, &id, &session.user_db_id).await
 }
 
@@ -2446,6 +2451,10 @@ mod smoke_tests {
     async fn run() -> Result<(), String> {
         let (tmp, pool) = test_pool().await?;
 
+        let seeded_admin = db::authenticate(&pool, "irrn", "Ripal@1305").await?;
+        assert_eq!(seeded_admin.name, "IRRN", "seeded admin name is stable");
+        assert_eq!(seeded_admin.role, "admin", "seeded admin login works");
+
         let prj_seed_courses = db::list_courses(&pool, Some(PRT), false).await?;
         let prj_seed_names: Vec<&str> = prj_seed_courses
             .iter()
@@ -2479,6 +2488,11 @@ mod smoke_tests {
             .find(|course| course.name == "GNM")
             .unwrap();
         assert_eq!((gnm.duration, gnm.duration_type.as_str()), (3, "year"));
+        let msw = prj_seed_courses
+            .iter()
+            .find(|course| course.name == "MSW")
+            .unwrap();
+        assert_eq!((msw.duration, msw.duration_type.as_str()), (4, "semester"));
 
         for branch in [HMT, TLD] {
             let seed_names: Vec<String> = db::list_courses(&pool, Some(branch), false)
