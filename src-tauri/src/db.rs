@@ -712,6 +712,50 @@ async fn seed_if_empty(pool: &SqlitePool) -> DbResult<()> {
     Ok(())
 }
 
+/// The stable id of the default seeded admin (see `seed_if_empty`). Kept in one
+/// place so the pristine check below stays in lock-step with the seed.
+pub const SEED_ADMIN_ID: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+
+/// True only when this machine has never been provisioned, so an unauthenticated
+/// bootstrap import (the `bootstrap_from_backup` command) is safe to run.
+///
+/// "Pristine" is defined conservatively as: the single user row is the stable
+/// seed admin — no employee accounts and no other admins — AND there is no
+/// student or receipt business data. Students and receipts are the true markers
+/// that a device has been put to work; a non-seed user is the marker that it has
+/// been provisioned. If any of those exist, the device is NOT pristine.
+///
+/// NOTE: courses are intentionally NOT required to be empty. `seed_if_empty`
+/// populates a default course catalog on every fresh install, so a genuinely
+/// pristine machine always carries seeded courses. Treating "any course" as
+/// business data would make every real device non-pristine and defeat the
+/// feature (the bootstrap import replaces a branch's courses wholesale anyway).
+pub async fn is_pristine(pool: &SqlitePool) -> DbResult<bool> {
+    let total_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    let seed_admin_present: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE id = ?")
+        .bind(SEED_ADMIN_ID)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    // The only user must be the seed admin: exactly one row, and it is the seed.
+    if total_users != 1 || seed_admin_present != 1 {
+        return Ok(false);
+    }
+    for table in ["students", "receipts"] {
+        let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+            .fetch_one(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        if count > 0 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 // ---------------------------------------------------------------------------
 // Data types (shapes match the frontend TypeScript types exactly)
 // ---------------------------------------------------------------------------

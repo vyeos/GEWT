@@ -7,6 +7,10 @@ import { makeMe } from "@/test/factories";
 
 vi.mock("@/lib/api", () => ({
   login: vi.fn(),
+  // The login screen probes pristine state on mount; a non-pristine device
+  // keeps these tests on the plain sign-in form (no first-run affordance).
+  isDevicePristine: vi.fn().mockResolvedValue(false),
+  bootstrapFromBackup: vi.fn(),
 }));
 
 const loginMock = vi.mocked(login);

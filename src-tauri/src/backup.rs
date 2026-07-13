@@ -473,6 +473,31 @@ pub async fn import_backup(
     src: &Path,
     restrict_branch: Option<&str>,
 ) -> BackupResult<ImportSummary> {
+    import_backup_inner(pool, src, restrict_branch, false).await
+}
+
+/// First-run provisioning import for a **pristine** machine (see
+/// `db::is_pristine` and the `bootstrap_from_backup` command). It runs with NO
+/// session, so — like an admin import — it applies config + accounts, EXCEPT
+/// that accounts are create-only: existing rows (the seed admin included) are
+/// never overwritten. That create-only guarantee is what makes an
+/// unauthenticated import safe: it can seed the employees the device needs, but
+/// can never change a credential that already exists (no offline password-reset
+/// backdoor). The caller MUST gate this on `db::is_pristine`.
+pub async fn bootstrap_import(pool: &SqlitePool, src: &Path) -> BackupResult<ImportSummary> {
+    import_backup_inner(pool, src, None, true).await
+}
+
+/// Shared import implementation. `bootstrap` switches account application from
+/// the normal newest-wins upsert to a create-only insert; everything else
+/// (config newest-wins, branch-partitioned business-data replace) is identical
+/// for both paths.
+async fn import_backup_inner(
+    pool: &SqlitePool,
+    src: &Path,
+    restrict_branch: Option<&str>,
+    bootstrap: bool,
+) -> BackupResult<ImportSummary> {
     let bytes = std::fs::read(src).map_err(|e| format!("Could not read backup file: {e}"))?;
     let backup: Backup = serde_json::from_slice(&bytes)
         .map_err(|_| "This is not a valid GEWT backup file".to_string())?;
@@ -557,8 +582,35 @@ pub async fn import_backup(
         .map_err(|e| e.to_string())?;
     }
 
-    // 3. Accounts (newest-wins per id).
+    // 3. Accounts. A normal admin import is newest-wins per id; a bootstrap
+    //    import is create-only (INSERT OR IGNORE) so it can seed the accounts a
+    //    pristine device needs without ever overwriting an existing row — the
+    //    seed admin's credential included. That is the guarantee that makes the
+    //    unauthenticated bootstrap path safe (no offline password-reset backdoor).
     for u in backup.accounts.iter().filter(|_| apply_config_and_accounts) {
+        if bootstrap {
+            sqlx::query(
+                "INSERT OR IGNORE INTO users (id, user_id, name, password_hash, role, branch_id, active, can_admission, can_receipt, can_outstanding, can_students, can_promote, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&u.id)
+            .bind(&u.user_id)
+            .bind(&u.name)
+            .bind(&u.password_hash)
+            .bind(&u.role)
+            .bind(&u.branch_id)
+            .bind(u.active)
+            .bind(u.can_admission)
+            .bind(u.can_receipt)
+            .bind(u.can_outstanding)
+            .bind(u.can_students)
+            .bind(u.can_promote)
+            .bind(&u.updated_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+            continue;
+        }
         let local: Option<String> = sqlx::query_scalar("SELECT updated_at FROM users WHERE id = ?")
             .bind(&u.id)
             .fetch_optional(&mut *tx)

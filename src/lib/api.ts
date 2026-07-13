@@ -74,6 +74,20 @@ export function importBackup(srcPath: string): Promise<ImportSummary> {
   return call<ImportSummary>("import_backup", { srcPath });
 }
 
+// True only when this device has never been provisioned (only the seed admin,
+// no student/receipt data). Used to decide whether to offer the first-run
+// "Set up this device from backup" affordance on the login screen.
+export function isDevicePristine(): Promise<boolean> {
+  return call<boolean>("is_device_pristine");
+}
+
+// First-run provisioning: seed accounts + business data from a `.gewtbak` on a
+// pristine device with no login. The backend rejects this on a device that is
+// already set up.
+export function bootstrapFromBackup(srcPath: string): Promise<ImportSummary> {
+  return call<ImportSummary>("bootstrap_from_backup", { srcPath });
+}
+
 export function createSnapshot(): Promise<{ path: string }> {
   return call<{ path: string }>("create_snapshot");
 }

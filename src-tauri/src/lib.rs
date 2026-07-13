@@ -563,6 +563,41 @@ async fn import_backup(
     Ok(summary)
 }
 
+/// Read-only probe the first-run/login screen uses to decide whether to offer
+/// the "Set up this device from backup" affordance. No session required — it is
+/// needed before anyone can log in.
+#[tauri::command]
+async fn is_device_pristine(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    db::is_pristine(&state.pool).await
+}
+
+/// First-run provisioning: import a `.gewtbak` on a PRISTINE device with NO
+/// login, so an employee whose account only exists in the admin's backup can set
+/// their own laptop up and then sign in as themselves — no "admin logs in on the
+/// employee's machine" step.
+///
+/// Security hinge: the ONLY reason we apply accounts here without a session is
+/// the `db::is_pristine` gate. On a pristine machine the well-known seed admin
+/// already grants full access, so seeding accounts without a login adds no new
+/// risk; and `backup::bootstrap_import` applies accounts create-only, so this
+/// path can never overwrite an existing credential (no offline password-reset
+/// backdoor). If the device is already set up, we refuse and change nothing.
+#[tauri::command]
+async fn bootstrap_from_backup(
+    state: tauri::State<'_, AppState>,
+    src_path: String,
+) -> Result<backup::ImportSummary, String> {
+    if !db::is_pristine(&state.pool).await? {
+        return Err(
+            "This device is already set up. Ask an admin to import a backup after logging in."
+                .to_string(),
+        );
+    }
+    // No session ever existed on a pristine device, so there is nothing to clear.
+    // The employee now signs in as themselves on the normal login screen.
+    backup::bootstrap_import(&state.pool, std::path::Path::new(&src_path)).await
+}
+
 #[derive(Serialize)]
 struct SnapshotInfo {
     path: String,
@@ -799,6 +834,8 @@ pub fn run() {
             db_data_version,
             export_backup,
             import_backup,
+            is_device_pristine,
+            bootstrap_from_backup,
             create_snapshot,
             list_snapshots,
             restore_snapshot,
@@ -2882,9 +2919,170 @@ mod smoke_tests {
         Ok(())
     }
 
+    fn employee_user_req(user_id: &str, branch: &str, password: &str) -> db::UserRequest {
+        db::UserRequest {
+            user_id: user_id.into(),
+            name: format!("{user_id} user"),
+            role: "employee".into(),
+            branch_id: Some(branch.into()),
+            password: Some(password.into()),
+            active: true,
+            can_admission: true,
+            can_receipt: true,
+            can_outstanding: true,
+            can_students: true,
+            can_promote: true,
+        }
+    }
+
+    // Positive: an employee whose account only lives in the admin's backup can
+    // provision a brand-new (pristine) device with NO login, then authenticate
+    // as themselves — the "admin logs in on the employee's laptop" step is gone.
+    async fn bootstrap_provisions_pristine_device_run() -> Result<(), String> {
+        // Source machine: admin creates a PRT employee and some PRT data, then
+        // exports the PRT branch as an admin backup.
+        let (tmp, source) = test_pool().await?;
+        db::create_user(&source, employee_user_req("prt_emp", PRT, "prtpass123")).await?;
+        let course = db::create_course(&source, course_req(PRT, "Bootstrap Course")).await?;
+        db::create_student(
+            &source,
+            student_req(PRT, &course.id, "2026-09-01", 1000.0),
+            ADMIN,
+        )
+        .await?;
+        let backup_file = tmp.join("bootstrap.gewtbak");
+        backup::export_backup(&source, &[PRT.into()], "admin", &backup_file).await?;
+
+        // Destination machine: a SEPARATE fresh pool with only the seed admin.
+        let (_dest_tmp, dest) = test_pool().await?;
+        assert!(
+            db::is_pristine(&dest).await?,
+            "a freshly seeded pool with only the seed admin is pristine"
+        );
+        assert!(
+            db::authenticate(&dest, "prt_emp", "prtpass123").await.is_err(),
+            "the employee cannot sign in before provisioning"
+        );
+
+        let summary = backup::bootstrap_import(&dest, &backup_file).await?;
+        assert_eq!(summary.students, 1, "bootstrap import applied the student");
+
+        // The employee can now authenticate with no prior admin login.
+        let emp = db::authenticate(&dest, "prt_emp", "prtpass123").await?;
+        assert_eq!(emp.role, "employee");
+        assert_eq!(emp.branch_id.as_deref(), Some(PRT));
+
+        // The seed admin is untouched (create-only never overwrote it).
+        db::authenticate(&dest, "irrn", "Ripal@1305").await?;
+
+        // Provisioning consumes pristineness, so a second unauthenticated import
+        // would be refused by the command gate.
+        assert!(
+            !db::is_pristine(&dest).await?,
+            "a provisioned device is no longer pristine"
+        );
+
+        Ok(())
+    }
+
+    // Negative #1: the gate that guards `bootstrap_from_backup`. A device with an
+    // employee account or business data is not pristine, so the command rejects
+    // the unauthenticated import ("This device is already set up.").
+    async fn bootstrap_gate_rejects_non_pristine_run() -> Result<(), String> {
+        let (_fresh_tmp, fresh) = test_pool().await?;
+        assert!(
+            db::is_pristine(&fresh).await?,
+            "the fresh seed baseline is pristine"
+        );
+
+        let (_emp_tmp, with_employee) = test_pool().await?;
+        db::create_user(&with_employee, employee_user_req("emp1", PRT, "pw123456")).await?;
+        assert!(
+            !db::is_pristine(&with_employee).await?,
+            "an employee account makes the device non-pristine"
+        );
+
+        let (_data_tmp, with_data) = test_pool().await?;
+        let course = db::create_course(&with_data, course_req(PRT, "Existing")).await?;
+        db::create_student(
+            &with_data,
+            student_req(PRT, &course.id, "2026-09-01", 1000.0),
+            ADMIN,
+        )
+        .await?;
+        assert!(
+            !db::is_pristine(&with_data).await?,
+            "existing student business data makes the device non-pristine"
+        );
+
+        Ok(())
+    }
+
+    // Negative #2 (create-only): a bootstrap import must NEVER overwrite an
+    // existing account's password hash — the guarantee against an offline
+    // password-reset backdoor.
+    async fn bootstrap_import_is_create_only_run() -> Result<(), String> {
+        // Source: an employee whose backup password we do NOT want to win.
+        let (tmp, source) = test_pool().await?;
+        let backup_emp =
+            db::create_user(&source, employee_user_req("shared", PRT, "backup_password")).await?;
+        let backup_file = tmp.join("bootstrap-createonly.gewtbak");
+        backup::export_backup(&source, &[PRT.into()], "admin", &backup_file).await?;
+
+        // Destination already has an account with the SAME id but a different,
+        // known password. (Forcing the shared id makes the import's INSERT OR
+        // IGNORE collide on that exact row.)
+        let (_dest_tmp, dest) = test_pool().await?;
+        let local_emp =
+            db::create_user(&dest, employee_user_req("shared", PRT, "original_password")).await?;
+        sqlx::query("UPDATE users SET id = ? WHERE id = ?")
+            .bind(&backup_emp.id)
+            .bind(&local_emp.id)
+            .execute(&dest)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Run the create-only apply directly (its safety does not depend on the
+        // pristine gate — the gate lives in the command).
+        backup::bootstrap_import(&dest, &backup_file).await?;
+
+        assert!(
+            db::authenticate(&dest, "shared", "original_password")
+                .await
+                .is_ok(),
+            "create-only import must not overwrite an existing account's password"
+        );
+        assert!(
+            db::authenticate(&dest, "shared", "backup_password")
+                .await
+                .is_err(),
+            "the backup password must not have replaced the local one"
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn backend_access_helpers_enforce_employee_scope_test() {
         backend_access_helpers_enforce_employee_scope();
+    }
+
+    #[test]
+    fn bootstrap_provisions_pristine_device() {
+        tauri::async_runtime::block_on(bootstrap_provisions_pristine_device_run())
+            .expect("bootstrap provisioning test failed");
+    }
+
+    #[test]
+    fn bootstrap_gate_rejects_non_pristine() {
+        tauri::async_runtime::block_on(bootstrap_gate_rejects_non_pristine_run())
+            .expect("bootstrap pristine gate test failed");
+    }
+
+    #[test]
+    fn bootstrap_import_is_create_only() {
+        tauri::async_runtime::block_on(bootstrap_import_is_create_only_run())
+            .expect("bootstrap create-only test failed");
     }
 
     #[test]

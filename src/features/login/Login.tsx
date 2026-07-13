@@ -1,4 +1,6 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { HardDriveDownload } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,13 +12,31 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { login } from "@/lib/api";
+import { bootstrapFromBackup, isDevicePristine, login } from "@/lib/api";
 import type { Me } from "@/types";
 
 export function Login({ onLogin }: { onLogin: (me: Me) => void }) {
   const [userId, setUserId] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  // Only offered on a brand-new device (backend confirms it is pristine).
+  const [pristine, setPristine] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void isDevicePristine()
+      .then((value) => {
+        if (!cancelled) setPristine(value);
+      })
+      .catch(() => {
+        // Not fatal — just hide the first-run affordance and let people log in.
+        if (!cancelled) setPristine(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -29,6 +49,29 @@ export function Login({ onLogin }: { onLogin: (me: Me) => void }) {
       toast.error(error instanceof Error ? error.message : "Login failed");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleBootstrap() {
+    const src = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "GEWT Backup", extensions: ["gewtbak", "json"] }],
+    });
+    if (!src || typeof src !== "string") return;
+    setBootstrapping(true);
+    try {
+      const summary = await bootstrapFromBackup(src);
+      toast.success(
+        `Device set up: ${summary.students} students across ${summary.branches.length} branch(es). Sign in with your account.`,
+      );
+      // The device is now provisioned, so hide the first-run affordance and let
+      // the employee sign in as themselves on this same login screen.
+      setPristine(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Setup failed");
+    } finally {
+      setBootstrapping(false);
     }
   }
 
@@ -72,6 +115,26 @@ export function Login({ onLogin }: { onLogin: (me: Me) => void }) {
               {busy ? "Signing in..." : "Sign In"}
             </Button>
           </form>
+          {pristine && (
+            <div className="mt-6 border-t pt-4">
+              <p className="mb-3 text-sm text-muted-foreground">
+                New device? Load a backup from the admin to set up your account,
+                then sign in above.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => void handleBootstrap()}
+                disabled={bootstrapping}
+              >
+                <HardDriveDownload className="size-4" />
+                {bootstrapping
+                  ? "Setting up device..."
+                  : "Set up this device from backup"}
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
